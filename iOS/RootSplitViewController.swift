@@ -194,13 +194,6 @@ final class RootSplitViewController: UISplitViewController {
 		coordinator.openInBrowserUsingOppositeOfSettings()
 	}
 
-	@objc override func toggleSidebar(_ sender: Any?) {
-		if displayMode == .secondaryOnly || displayMode == .oneBesideSecondary {
-			preferredDisplayMode = .twoBesideSecondary
-		} else {
-			preferredDisplayMode = .oneBesideSecondary
-		}
-	}
 
 	@objc func sortByNewestArticleOnTop(_ sender: Any?) {
 		AppDefaults.shared.timelineSortDirection = .orderedDescending
