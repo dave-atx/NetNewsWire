@@ -16,6 +16,7 @@ import RSTree
 import SafariServices
 import SwiftUI
 import Images
+import UniformTypeIdentifiers
 
 enum SearchScope: Int {
 	case timeline = 0
@@ -152,6 +153,7 @@ struct SidebarItemNode: Hashable, Sendable {
 	}
 
 	private var exceptionArticleFetcher: ArticleFetcher?
+	private weak var opmlAccount: Account?
 	private(set) var timelineFeed: SidebarItem? {
 		didSet {
 			mainTimelineViewController?.updateNavigationBarTitle(timelineFeed?.nameForDisplay ?? "")
@@ -1403,6 +1405,119 @@ struct SidebarItemNode: Hashable, Sendable {
 		rootSplitViewController.present(feedInspectorNavController, animated: true)
 	}
 
+	func importOPML() {
+		switch AccountManager.shared.activeAccounts.count {
+		case 0:
+			rootSplitViewController.presentError(title: "Error", message: NSLocalizedString("You must have at least one active account.", comment: "Missing active account"))
+		case 1:
+			opmlAccount = AccountManager.shared.activeAccounts.first
+			importOPMLDocumentPicker()
+		default:
+			importOPMLAccountPicker()
+		}
+	}
+
+	func exportOPML() {
+		if AccountManager.shared.accounts.count == 1 {
+			opmlAccount = AccountManager.shared.accounts.first
+			exportOPMLDocumentPicker()
+		} else {
+			exportOPMLAccountPicker()
+		}
+	}
+
+	private func importOPMLAccountPicker() {
+		let title = NSLocalizedString("Choose an account to receive the imported feeds and folders", comment: "Import Account")
+		let alert = UIAlertController(title: title, message: nil, preferredStyle: .actionSheet)
+
+		if let popoverController = alert.popoverPresentationController {
+			popoverController.sourceView = rootSplitViewController.view
+			popoverController.sourceRect = CGRect(x: rootSplitViewController.view.bounds.midX, y: rootSplitViewController.view.bounds.midY, width: 0, height: 0)
+		}
+
+		for account in AccountManager.shared.sortedActiveAccounts {
+			let action = UIAlertAction(title: account.nameForDisplay, style: .default) { [weak self] _ in
+				self?.opmlAccount = account
+				self?.importOPMLDocumentPicker()
+			}
+			alert.addAction(action)
+		}
+
+		let cancelTitle = NSLocalizedString("Cancel", comment: "Cancel button")
+		alert.addAction(UIAlertAction(title: cancelTitle, style: .cancel))
+
+		rootSplitViewController.present(alert, animated: true)
+	}
+
+	private func importOPMLDocumentPicker() {
+		var contentTypes: [UTType] = []
+
+		// Create UTType for .opml files by extension, without requiring conformance.
+		// This ensures files ending in .opml can be selected no matter how OPML is registered.
+		// <https://github.com/Ranchero-Software/NetNewsWire/issues/4858>
+		if let opmlByExtension = UTType(filenameExtension: "opml") {
+			contentTypes.append(opmlByExtension)
+		}
+
+		// Also try the registered org.opml.opml UTI if it exists
+		if let registeredOPML = UTType("org.opml.opml") {
+			contentTypes.append(registeredOPML)
+		}
+
+		// Include XML as a fallback
+		contentTypes.append(.xml)
+
+		let documentPicker = UIDocumentPickerViewController(forOpeningContentTypes: contentTypes, asCopy: true)
+		documentPicker.delegate = self
+		documentPicker.modalPresentationStyle = .formSheet
+		rootSplitViewController.present(documentPicker, animated: true)
+	}
+
+	private func exportOPMLAccountPicker() {
+		let title = NSLocalizedString("Choose an account with the subscriptions to export", comment: "Export Account")
+		let alert = UIAlertController(title: title, message: nil, preferredStyle: .actionSheet)
+
+		if let popoverController = alert.popoverPresentationController {
+			popoverController.sourceView = rootSplitViewController.view
+			popoverController.sourceRect = CGRect(x: rootSplitViewController.view.bounds.midX, y: rootSplitViewController.view.bounds.midY, width: 0, height: 0)
+		}
+
+		for account in AccountManager.shared.sortedAccounts {
+			let action = UIAlertAction(title: account.nameForDisplay, style: .default) { [weak self] _ in
+				self?.opmlAccount = account
+				self?.exportOPMLDocumentPicker()
+			}
+			alert.addAction(action)
+		}
+
+		let cancelTitle = NSLocalizedString("Cancel", comment: "Cancel button")
+		alert.addAction(UIAlertAction(title: cancelTitle, style: .cancel))
+
+		rootSplitViewController.present(alert, animated: true)
+	}
+
+	private func exportOPMLDocumentPicker() {
+		guard let account = opmlAccount else {
+			return
+		}
+
+		let accountName = account.nameForDisplay.replacingOccurrences(of: " ", with: "").trimmingCharacters(in: .whitespaces)
+		let filename = "Subscriptions-\(accountName).opml"
+		let tempFile = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
+		do {
+			try account.logActivity(kind: .exportOPML, detail: filename) {
+				let opmlString = OPMLExporter.OPMLString(with: account, title: filename)
+				try opmlString.write(to: tempFile, atomically: true, encoding: String.Encoding.utf8)
+			}
+		} catch {
+			rootSplitViewController.presentError(title: "OPML Export Error", message: error.localizedDescription)
+		}
+
+		let docPicker = UIDocumentPickerViewController(forExporting: [tempFile])
+		docPicker.modalPresentationStyle = .formSheet
+		rootSplitViewController.present(docPicker, animated: true)
+	}
+
 	func showAddFeed(initialFeed: String? = nil, initialFeedName: String? = nil) {
 
 		// Since Add Feed can be opened from anywhere with a keyboard shortcut, we have to deselect any currently selected feeds
@@ -1472,6 +1587,28 @@ struct SidebarItemNode: Hashable, Sendable {
 		} else {
 			mainFeedCollectionViewController.openInAppBrowser()
 		}
+	}
+
+	func openInBrowserUsingOppositeOfSettings() {
+		guard let url = currentArticle?.preferredURL else {
+			return
+		}
+		if AppDefaults.shared.useSystemBrowser {
+			guard let safariViewController = SFSafariViewController.safeSafariViewController(url) else {
+				return
+			}
+			rootSplitViewController.present(safariViewController, animated: true)
+		} else {
+			UIApplication.shared.open(url, options: [:])
+		}
+	}
+
+	func toggleReaderView() {
+		articleViewController?.toggleReaderView(nil)
+	}
+
+	func beginFindInArticle() {
+		articleViewController?.beginFind()
 	}
 
 	func navigateToFeeds() {
@@ -1597,6 +1734,27 @@ extension SceneCoordinator: UINavigationControllerDelegate {
 			navigationController.setNavigationBarHidden(false, animated: true)
 			navigationController.setToolbarHidden(false, animated: true)
 			return
+		}
+	}
+
+}
+
+// MARK: UIDocumentPickerDelegate
+
+extension SceneCoordinator: UIDocumentPickerDelegate {
+
+	func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+		for url in urls {
+			opmlAccount?.importOPML(url) { [weak self] result in
+				switch result {
+				case .success:
+					break
+				case .failure:
+					let title = NSLocalizedString("Import Failed", comment: "Import Failed")
+					let message = NSLocalizedString("We were unable to process the selected file.  Please ensure that it is a properly formatted OPML file.", comment: "Import Failed Message")
+					self?.rootSplitViewController.presentError(title: title, message: message)
+				}
+			}
 		}
 	}
 
