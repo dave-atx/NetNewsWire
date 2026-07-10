@@ -10,69 +10,61 @@ import UIKit
 @MainActor enum AppCommands {
 
 	static func globalKeyCommands() -> [UIKeyCommand] {
-		var keys = [UIKeyCommand]()
-
-		keys.append(keyCommand(title: NSLocalizedString("Scroll or Go to Next Unread", comment: "Command"), action: "scrollOrGoToNextUnread:", input: "\u{0020}"))
-		keys.append(keyCommand(title: NSLocalizedString("Scroll Up", comment: "Command"), action: "scrollUp:", input: "\u{0020}", modifiers: [.shift]))
-		keys.append(keyCommand(title: NSLocalizedString("Go to Previous Unread", comment: "Command"), action: "goToPreviousUnread:", input: "-"))
-		keys.append(keyCommand(action: "nextUnread:", input: "+"))
-		keys.append(keyCommand(action: "nextUnread:", input: "+", modifiers: [.shift]))
-		keys.append(keyCommand(title: NSLocalizedString("Next Unread", comment: "Command"), action: "nextUnread:", input: "n"))
-		keys.append(keyCommand(title: NSLocalizedString("Mark Read", comment: "Command"), action: "toggleRead:", input: "r"))
-		keys.append(keyCommand(title: NSLocalizedString("Mark Unread", comment: "Command"), action: "toggleRead:", input: "u"))
-		keys.append(keyCommand(title: NSLocalizedString("Mark All as Read", comment: "Command"), action: "markAllAsRead:", input: "k"))
-		keys.append(keyCommand(title: NSLocalizedString("Mark Unread and Go To Next Unread", comment: "Command"), action: "markUnreadAndGoToNextUnread:", input: "m"))
-		keys.append(keyCommand(title: NSLocalizedString("Mark All as Read in Timeline and Go To Next Unread", comment: "Command"), action: "markAllAsReadAndGoToNextUnread:", input: "l"))
-		keys.append(keyCommand(title: NSLocalizedString("Mark Older as Read", comment: "Command"), action: "markOlderArticlesAsRead:", input: "o"))
-		keys.append(keyCommand(title: NSLocalizedString("Open in Browser", comment: "Command"), action: "openInBrowser:", input: "b"))
-		keys.append(keyCommand(title: NSLocalizedString("Open In App Browser", comment: "Command"), action: "openInAppBrowser:", input: "\r"))
-		keys.append(keyCommand(action: "openInBrowserUsingOppositeOfSettings:", input: "\r", modifiers: [.shift]))
-		keys.append(keyCommand(action: "openInBrowserUsingOppositeOfSettings:", input: "b", modifiers: [.shift]))
-		keys.append(keyCommand(title: NSLocalizedString("Go to Previous Feed", comment: "Command"), action: "goToPreviousSubscription:", input: "a"))
-		keys.append(keyCommand(title: NSLocalizedString("Go to Next Feed", comment: "Command"), action: "goToNextSubscription:", input: "z"))
-		keys.append(keyCommand(action: "toggleStarred:", input: "s"))
-		keys.append(keyCommand(title: NSLocalizedString("Go To Settings", comment: "Command"), action: "goToSettings:", input: ",", modifiers: [.command]))
-
-		return keys
+		[
+			keyCommand(title: NSLocalizedString("Scroll or Go to Next Unread", comment: "Command"), action: #selector(AppCommandResponder.scrollOrGoToNextUnread(_:)), input: "\u{0020}"),
+			keyCommand(title: NSLocalizedString("Scroll Up", comment: "Command"), action: #selector(AppCommandResponder.scrollUp(_:)), input: "\u{0020}", modifiers: [.shift]),
+			keyCommand(title: NSLocalizedString("Go to Previous Unread", comment: "Command"), action: #selector(AppCommandResponder.goToPreviousUnread(_:)), input: "-"),
+			keyCommand(action: #selector(AppCommandResponder.nextUnread(_:)), input: "+"),
+			keyCommand(action: #selector(AppCommandResponder.nextUnread(_:)), input: "+", modifiers: [.shift]),
+			keyCommand(title: NSLocalizedString("Next Unread", comment: "Command"), action: #selector(AppCommandResponder.nextUnread(_:)), input: "n"),
+			keyCommand(title: NSLocalizedString("Mark Read", comment: "Command"), action: #selector(AppCommandResponder.toggleRead(_:)), input: "r"),
+			keyCommand(title: NSLocalizedString("Mark Unread", comment: "Command"), action: #selector(AppCommandResponder.toggleRead(_:)), input: "u"),
+			keyCommand(title: NSLocalizedString("Mark All as Read", comment: "Command"), action: #selector(AppCommandResponder.markAllAsRead(_:)), input: "k"),
+			keyCommand(title: NSLocalizedString("Mark Unread and Go To Next Unread", comment: "Command"), action: #selector(AppCommandResponder.markUnreadAndGoToNextUnread(_:)), input: "m"),
+			keyCommand(title: NSLocalizedString("Mark All as Read in Timeline and Go To Next Unread", comment: "Command"), action: #selector(AppCommandResponder.markAllAsReadAndGoToNextUnread(_:)), input: "l"),
+			keyCommand(title: NSLocalizedString("Mark Older as Read", comment: "Command"), action: #selector(AppCommandResponder.markOlderArticlesAsRead(_:)), input: "o"),
+			keyCommand(title: NSLocalizedString("Open in Browser", comment: "Command"), action: #selector(AppCommandResponder.openInBrowser(_:)), input: "b"),
+			keyCommand(title: NSLocalizedString("Open In App Browser", comment: "Command"), action: #selector(AppCommandResponder.openInAppBrowser(_:)), input: "\r"),
+			keyCommand(action: #selector(AppCommandResponder.openInBrowserUsingOppositeOfSettings(_:)), input: "\r", modifiers: [.shift]),
+			keyCommand(action: #selector(AppCommandResponder.openInBrowserUsingOppositeOfSettings(_:)), input: "b", modifiers: [.shift]),
+			keyCommand(title: NSLocalizedString("Go to Previous Feed", comment: "Command"), action: #selector(AppCommandResponder.goToPreviousSubscription(_:)), input: "a"),
+			keyCommand(title: NSLocalizedString("Go to Next Feed", comment: "Command"), action: #selector(AppCommandResponder.goToNextSubscription(_:)), input: "z"),
+			keyCommand(action: #selector(AppCommandResponder.toggleStarred(_:)), input: "s"),
+			keyCommand(title: NSLocalizedString("Go To Settings", comment: "Command"), action: #selector(AppCommandResponder.goToSettings(_:)), input: ",", modifiers: [.command])
+		]
 	}
 
 	static func sidebarKeyCommands() -> [UIKeyCommand] {
-		var keys = [UIKeyCommand]()
-
-		keys.append(keyCommand(title: NSLocalizedString("Select Next Up", comment: "Command"), action: "selectNextUp:", input: UIKeyCommand.inputUpArrow))
-		keys.append(keyCommand(title: NSLocalizedString("Select Next Down", comment: "Command"), action: "selectNextDown:", input: UIKeyCommand.inputDownArrow))
-		keys.append(keyCommand(action: "navigateToTimeline:", input: "\t"))
-		keys.append(keyCommand(title: NSLocalizedString("Navigate to Timeline", comment: "Command"), action: "navigateToTimeline:", input: UIKeyCommand.inputRightArrow))
-		keys.append(keyCommand(title: NSLocalizedString("Collapse Selected Row", comment: "Command"), action: "collapseSelectedRows:", input: ","))
-		keys.append(keyCommand(title: NSLocalizedString("Collapse Selected Row", comment: "Command"), action: "collapseSelectedRows:", input: UIKeyCommand.inputLeftArrow, modifiers: [.command]))
-		keys.append(keyCommand(title: NSLocalizedString("Expand Selected Row", comment: "Command"), action: "expandSelectedRows:", input: "."))
-		keys.append(keyCommand(title: NSLocalizedString("Expand Selected Row", comment: "Command"), action: "expandSelectedRows:", input: UIKeyCommand.inputRightArrow, modifiers: [.command]))
-		keys.append(keyCommand(title: NSLocalizedString("Collapse All", comment: "Command"), action: "collapseAllExceptForGroupItems:", input: ";"))
-		keys.append(keyCommand(action: "collapseAllExceptForGroupItems:", input: UIKeyCommand.inputLeftArrow, modifiers: [.command, .alternate]))
-		keys.append(keyCommand(title: NSLocalizedString("Expand All", comment: "Command"), action: "expandAll:", input: "'"))
-		keys.append(keyCommand(action: "expandAll:", input: UIKeyCommand.inputRightArrow, modifiers: [.command, .alternate]))
-		keys.append(keyCommand(title: NSLocalizedString("Delete", comment: "Command"), action: "delete:", input: "\u{8}"))
-
-		return keys
+		[
+			keyCommand(title: NSLocalizedString("Select Next Up", comment: "Command"), action: #selector(AppCommandResponder.selectNextUp(_:)), input: UIKeyCommand.inputUpArrow),
+			keyCommand(title: NSLocalizedString("Select Next Down", comment: "Command"), action: #selector(AppCommandResponder.selectNextDown(_:)), input: UIKeyCommand.inputDownArrow),
+			keyCommand(action: #selector(AppCommandResponder.navigateToTimeline(_:)), input: "\t"),
+			keyCommand(title: NSLocalizedString("Navigate to Timeline", comment: "Command"), action: #selector(AppCommandResponder.navigateToTimeline(_:)), input: UIKeyCommand.inputRightArrow),
+			keyCommand(title: NSLocalizedString("Collapse Selected Row", comment: "Command"), action: #selector(AppCommandResponder.collapseSelectedRows(_:)), input: ","),
+			keyCommand(title: NSLocalizedString("Collapse Selected Row", comment: "Command"), action: #selector(AppCommandResponder.collapseSelectedRows(_:)), input: UIKeyCommand.inputLeftArrow, modifiers: [.command]),
+			keyCommand(title: NSLocalizedString("Expand Selected Row", comment: "Command"), action: #selector(AppCommandResponder.expandSelectedRows(_:)), input: "."),
+			keyCommand(title: NSLocalizedString("Expand Selected Row", comment: "Command"), action: #selector(AppCommandResponder.expandSelectedRows(_:)), input: UIKeyCommand.inputRightArrow, modifiers: [.command]),
+			keyCommand(title: NSLocalizedString("Collapse All", comment: "Command"), action: #selector(AppCommandResponder.collapseAllExceptForGroupItems(_:)), input: ";"),
+			keyCommand(action: #selector(AppCommandResponder.collapseAllExceptForGroupItems(_:)), input: UIKeyCommand.inputLeftArrow, modifiers: [.command, .alternate]),
+			keyCommand(title: NSLocalizedString("Expand All", comment: "Command"), action: #selector(AppCommandResponder.expandAll(_:)), input: "'"),
+			keyCommand(action: #selector(AppCommandResponder.expandAll(_:)), input: UIKeyCommand.inputRightArrow, modifiers: [.command, .alternate]),
+			keyCommand(title: NSLocalizedString("Delete", comment: "Command"), action: #selector(AppCommandResponder.delete(_:)), input: "\u{8}")
+		]
 	}
 
 	static func timelineKeyCommands() -> [UIKeyCommand] {
-		var keys = [UIKeyCommand]()
-
-		keys.append(keyCommand(title: NSLocalizedString("Select Next Up", comment: "Command"), action: "selectNextUp:", input: UIKeyCommand.inputUpArrow))
-		keys.append(keyCommand(title: NSLocalizedString("Select Next Down", comment: "Command"), action: "selectNextDown:", input: UIKeyCommand.inputDownArrow))
-		keys.append(keyCommand(title: NSLocalizedString("Navigate to Feeds", comment: "Command"), action: "navigateToSidebar:", input: UIKeyCommand.inputLeftArrow))
-		keys.append(keyCommand(title: NSLocalizedString("Navigate to Detail", comment: "Command"), action: "navigateToDetail:", input: UIKeyCommand.inputRightArrow))
-
-		return keys
+		[
+			keyCommand(title: NSLocalizedString("Select Next Up", comment: "Command"), action: #selector(AppCommandResponder.selectNextUp(_:)), input: UIKeyCommand.inputUpArrow),
+			keyCommand(title: NSLocalizedString("Select Next Down", comment: "Command"), action: #selector(AppCommandResponder.selectNextDown(_:)), input: UIKeyCommand.inputDownArrow),
+			keyCommand(title: NSLocalizedString("Navigate to Feeds", comment: "Command"), action: #selector(AppCommandResponder.navigateToSidebar(_:)), input: UIKeyCommand.inputLeftArrow),
+			keyCommand(title: NSLocalizedString("Navigate to Detail", comment: "Command"), action: #selector(AppCommandResponder.navigateToDetail(_:)), input: UIKeyCommand.inputRightArrow)
+		]
 	}
 
 	static func detailKeyCommands() -> [UIKeyCommand] {
-		var keys = [UIKeyCommand]()
-
-		keys.append(keyCommand(title: NSLocalizedString("Navigate to Timeline", comment: "Command"), action: "navigateToTimeline:", input: UIKeyCommand.inputLeftArrow))
-
-		return keys
+		[
+			keyCommand(title: NSLocalizedString("Navigate to Timeline", comment: "Command"), action: #selector(AppCommandResponder.navigateToTimeline(_:)), input: UIKeyCommand.inputLeftArrow)
+		]
 	}
 
 	static func buildMenus(with builder: UIMenuBuilder) {
@@ -89,63 +81,62 @@ import UIKit
 	}
 }
 
-private extension AppCommands {
+extension AppCommands {
 
-	static let newItemsMenuIdentifier = UIMenu.Identifier(rawValue: "com.ranchero.NetNewsWire.newItems")
-	static let findMenuIdentifier = UIMenu.Identifier(rawValue: "com.ranchero.NetNewsWire.find")
-	static let sortByMenuIdentifier = UIMenu.Identifier(rawValue: "com.ranchero.NetNewsWire.sortBy")
-	static let viewMenuIdentifier = UIMenu.Identifier(rawValue: "com.ranchero.NetNewsWire.view")
-	static let goMenuIdentifier = UIMenu.Identifier(rawValue: "com.ranchero.NetNewsWire.go")
-	static let articleMenuIdentifier = UIMenu.Identifier(rawValue: "com.ranchero.NetNewsWire.article")
+	fileprivate static let newItemsMenuIdentifier = UIMenu.Identifier(rawValue: "com.ranchero.NetNewsWire.newItems")
+	fileprivate static let findMenuIdentifier = UIMenu.Identifier(rawValue: "com.ranchero.NetNewsWire.find")
+	fileprivate static let sortByMenuIdentifier = UIMenu.Identifier(rawValue: "com.ranchero.NetNewsWire.sortBy")
+	fileprivate static let viewMenuIdentifier = UIMenu.Identifier(rawValue: "com.ranchero.NetNewsWire.view")
+	fileprivate static let goMenuIdentifier = UIMenu.Identifier(rawValue: "com.ranchero.NetNewsWire.go")
+	fileprivate static let articleMenuIdentifier = UIMenu.Identifier(rawValue: "com.ranchero.NetNewsWire.article")
 
-	static func keyCommand(title: String? = nil, action: String, input: String, modifiers: UIKeyModifierFlags = []) -> UIKeyCommand {
-		let selector = NSSelectorFromString(action)
+	fileprivate static func keyCommand(title: String? = nil, action: Selector, input: String, modifiers: UIKeyModifierFlags = []) -> UIKeyCommand {
 		let command: UIKeyCommand
 		if let title {
-			command = UIKeyCommand(title: title, action: selector, input: input, modifierFlags: modifiers)
+			command = UIKeyCommand(title: title, action: action, input: input, modifierFlags: modifiers)
 		} else {
-			command = UIKeyCommand(input: input, modifierFlags: modifiers, action: selector)
+			command = UIKeyCommand(input: input, modifierFlags: modifiers, action: action)
 		}
 		command.wantsPriorityOverSystemBehavior = true
 		return command
 	}
 
-	static func menuCommand(title: String, action: String, input: String? = nil, modifiers: UIKeyModifierFlags = []) -> UIMenuElement {
+	fileprivate static func menuCommand(title: String, action: Selector, input: String? = nil, modifiers: UIKeyModifierFlags = []) -> UIMenuElement {
 		guard let input else {
-			return UICommand(title: title, action: NSSelectorFromString(action))
+			return UICommand(title: title, action: action)
 		}
-		let command = UIKeyCommand(title: title, action: NSSelectorFromString(action), input: input, modifierFlags: modifiers)
+		let command = UIKeyCommand(title: title, action: action, input: input, modifierFlags: modifiers)
 		command.wantsPriorityOverSystemBehavior = true
 		return command
 	}
 
 	// MARK: - File
 
-	static func fileMenu(_ builder: UIMenuBuilder) {
+	fileprivate static func fileMenu(_ builder: UIMenuBuilder) {
 		let importExportGroup = UIMenu(title: "", options: .displayInline, children: [
-			menuCommand(title: NSLocalizedString("Import Subscriptions…", comment: "Command"), action: "importOPML:"),
-			menuCommand(title: NSLocalizedString("Export Subscriptions…", comment: "Command"), action: "exportOPML:", input: "e", modifiers: [.command, .alternate])
+			menuCommand(title: NSLocalizedString("Import Subscriptions…", comment: "Command"), action: #selector(AppCommandResponder.importOPML(_:))),
+			menuCommand(title: NSLocalizedString("Export Subscriptions…", comment: "Command"), action: #selector(AppCommandResponder.exportOPML(_:)), input: "e", modifiers: [.command, .alternate])
 		])
 		builder.insertChild(importExportGroup, atStartOfMenu: .file)
 
 		let refreshGroup = UIMenu(title: "", options: .displayInline, children: [
-			menuCommand(title: NSLocalizedString("Refresh", comment: "Command"), action: "refresh:", input: "r", modifiers: [.command])
+			menuCommand(title: NSLocalizedString("Refresh", comment: "Command"), action: #selector(AppCommandResponder.refresh(_:)), input: "r", modifiers: [.command])
 		])
 		builder.insertChild(refreshGroup, atStartOfMenu: .file)
 
 		let newItemsGroup = UIMenu(title: "", image: nil, identifier: newItemsMenuIdentifier, options: .displayInline, children: [
-			menuCommand(title: NSLocalizedString("New Feed", comment: "Command"), action: "addNewFeed:", input: "n", modifiers: [.command]),
-			menuCommand(title: NSLocalizedString("New Folder", comment: "Command"), action: "addNewFolder:", input: "n", modifiers: [.command, .shift])
+			menuCommand(title: NSLocalizedString("New Feed", comment: "Command"), action: #selector(AppCommandResponder.addNewFeed(_:)), input: "n", modifiers: [.command]),
+			menuCommand(title: NSLocalizedString("New Folder", comment: "Command"), action: #selector(AppCommandResponder.addNewFolder(_:)), input: "n", modifiers: [.command, .shift])
 		])
 		builder.insertChild(newItemsGroup, atStartOfMenu: .file)
 	}
 
 	// MARK: - Find
 
-	static func findMenu(_ builder: UIMenuBuilder) {
+	fileprivate static func findMenu(_ builder: UIMenuBuilder) {
 		let findElements = [
-			menuCommand(title: NSLocalizedString("Article Search", comment: "Command"), action: "articleSearch:", input: "f", modifiers: [.command, .alternate]),
-			menuCommand(title: NSLocalizedString("Find in Article", comment: "Command"), action: "beginFind:", input: "f", modifiers: [.command])
+			menuCommand(title: NSLocalizedString("Article Search", comment: "Command"), action: #selector(AppCommandResponder.articleSearch(_:)), input: "f", modifiers: [.command, .alternate]),
+			menuCommand(title: NSLocalizedString("Find in Article", comment: "Command"), action: #selector(AppCommandResponder.beginFind(_:)), input: "f", modifiers: [.command])
 		]
 
 		// Replace the system Find menu: its Find (⌘F) and Find & Replace (⌥⌘F)
@@ -160,18 +151,18 @@ private extension AppCommands {
 
 	// MARK: - View
 
-	static func viewMenu(_ builder: UIMenuBuilder, hasViewMenu: Bool) {
+	fileprivate static func viewMenu(_ builder: UIMenuBuilder, hasViewMenu: Bool) {
 		let sortByMenu = UIMenu(title: NSLocalizedString("Sort Articles By", comment: "Command"), identifier: sortByMenuIdentifier, children: [
-			menuCommand(title: NSLocalizedString("Newest Article on Top", comment: "Command"), action: "sortByNewestArticleOnTop:"),
-			menuCommand(title: NSLocalizedString("Oldest Article on Top", comment: "Command"), action: "sortByOldestArticleOnTop:")
+			menuCommand(title: NSLocalizedString("Newest Article on Top", comment: "Command"), action: #selector(AppCommandResponder.sortByNewestArticleOnTop(_:))),
+			menuCommand(title: NSLocalizedString("Oldest Article on Top", comment: "Command"), action: #selector(AppCommandResponder.sortByOldestArticleOnTop(_:)))
 		])
-		let groupByFeedCommand = menuCommand(title: NSLocalizedString("Group by Feed", comment: "Command"), action: "groupByFeedToggled:")
+		let groupByFeedCommand = menuCommand(title: NSLocalizedString("Group by Feed", comment: "Command"), action: #selector(AppCommandResponder.groupByFeedToggled(_:)))
 		let topGroup = UIMenu(title: "", options: .displayInline, children: [sortByMenu, groupByFeedCommand])
 
 		let cleanUpGroup = UIMenu(title: "", options: .displayInline, children: [
-			menuCommand(title: NSLocalizedString("Clean Up", comment: "Command"), action: "cleanUp:", input: "'", modifiers: [.command]),
-			menuCommand(title: NSLocalizedString("Hide Read Articles", comment: "Command"), action: "toggleReadArticlesFilter:", input: "h", modifiers: [.command, .shift]),
-			menuCommand(title: NSLocalizedString("Hide Read Feeds", comment: "Command"), action: "toggleReadFeedsFilter:", input: "f", modifiers: [.command, .shift])
+			menuCommand(title: NSLocalizedString("Clean Up", comment: "Command"), action: #selector(AppCommandResponder.cleanUp(_:)), input: "'", modifiers: [.command]),
+			menuCommand(title: NSLocalizedString("Hide Read Articles", comment: "Command"), action: #selector(AppCommandResponder.toggleReadArticlesFilter(_:)), input: "h", modifiers: [.command, .shift]),
+			menuCommand(title: NSLocalizedString("Hide Read Feeds", comment: "Command"), action: #selector(AppCommandResponder.toggleReadFeedsFilter(_:)), input: "f", modifiers: [.command, .shift])
 		])
 
 		// No Toggle Sidebar item: the system View menu already provides
@@ -187,12 +178,12 @@ private extension AppCommands {
 
 	// MARK: - Go
 
-	static func goMenu(_ builder: UIMenuBuilder, hasViewMenu: Bool) {
-		let nextUnreadCommand = menuCommand(title: NSLocalizedString("Next Unread", comment: "Command"), action: "nextUnread:", input: "/", modifiers: [.command])
+	fileprivate static func goMenu(_ builder: UIMenuBuilder, hasViewMenu: Bool) {
+		let nextUnreadCommand = menuCommand(title: NSLocalizedString("Next Unread", comment: "Command"), action: #selector(AppCommandResponder.nextUnread(_:)), input: "/", modifiers: [.command])
 		let smartFeedsGroup = UIMenu(title: "", options: .displayInline, children: [
-			menuCommand(title: NSLocalizedString("Today", comment: "Command"), action: "goToToday:", input: "1", modifiers: [.command]),
-			menuCommand(title: NSLocalizedString("All Unread", comment: "Command"), action: "goToAllUnread:", input: "2", modifiers: [.command]),
-			menuCommand(title: NSLocalizedString("Starred", comment: "Command"), action: "goToStarred:", input: "3", modifiers: [.command])
+			menuCommand(title: NSLocalizedString("Today", comment: "Command"), action: #selector(AppCommandResponder.goToToday(_:)), input: "1", modifiers: [.command]),
+			menuCommand(title: NSLocalizedString("All Unread", comment: "Command"), action: #selector(AppCommandResponder.goToAllUnread(_:)), input: "2", modifiers: [.command]),
+			menuCommand(title: NSLocalizedString("Starred", comment: "Command"), action: #selector(AppCommandResponder.goToStarred(_:)), input: "3", modifiers: [.command])
 		])
 
 		let goMenu = UIMenu(title: NSLocalizedString("Go", comment: "Command"), identifier: goMenuIdentifier, children: [nextUnreadCommand, smartFeedsGroup])
@@ -200,31 +191,104 @@ private extension AppCommands {
 		if hasViewMenu {
 			builder.insertSibling(goMenu, afterMenu: .view)
 		} else {
-			builder.insertSibling(goMenu, afterMenu: .edit)
+			// Anchor to the custom View menu inserted above. Anchoring to .edit
+			// would place Go ahead of View, since each insert lands immediately
+			// after its anchor.
+			builder.insertSibling(goMenu, afterMenu: viewMenuIdentifier)
 		}
 	}
 
 	// MARK: - Article
 
-	static func articleMenu(_ builder: UIMenuBuilder) {
+	fileprivate static func articleMenu(_ builder: UIMenuBuilder) {
 		let markGroup = UIMenu(title: "", options: .displayInline, children: [
-			menuCommand(title: NSLocalizedString("Mark as Read", comment: "Command"), action: "toggleRead:", input: "u", modifiers: [.command, .shift]),
-			menuCommand(title: NSLocalizedString("Mark All as Read", comment: "Command"), action: "markAllAsRead:", input: "k", modifiers: [.command]),
-			menuCommand(title: NSLocalizedString("Mark Above as Read", comment: "Command"), action: "markAboveAsRead:", input: "k", modifiers: [.command, .control]),
-			menuCommand(title: NSLocalizedString("Mark Below as Read", comment: "Command"), action: "markBelowAsRead:", input: "k", modifiers: [.command, .shift])
+			menuCommand(title: NSLocalizedString("Mark as Read", comment: "Command"), action: #selector(AppCommandResponder.toggleRead(_:)), input: "u", modifiers: [.command, .shift]),
+			menuCommand(title: NSLocalizedString("Mark All as Read", comment: "Command"), action: #selector(AppCommandResponder.markAllAsRead(_:)), input: "k", modifiers: [.command]),
+			menuCommand(title: NSLocalizedString("Mark Above as Read", comment: "Command"), action: #selector(AppCommandResponder.markAboveAsRead(_:)), input: "k", modifiers: [.command, .control]),
+			menuCommand(title: NSLocalizedString("Mark Below as Read", comment: "Command"), action: #selector(AppCommandResponder.markBelowAsRead(_:)), input: "k", modifiers: [.command, .shift])
 		])
 
 		let starredGroup = UIMenu(title: "", options: .displayInline, children: [
-			menuCommand(title: NSLocalizedString("Mark as Starred", comment: "Command"), action: "toggleStarred:", input: "l", modifiers: [.command, .shift])
+			menuCommand(title: NSLocalizedString("Mark as Starred", comment: "Command"), action: #selector(AppCommandResponder.toggleStarred(_:)), input: "l", modifiers: [.command, .shift])
 		])
 
 		let readerGroup = UIMenu(title: "", options: .displayInline, children: [
-			menuCommand(title: NSLocalizedString("Show Reader View", comment: "Command"), action: "toggleReaderView:", input: "r", modifiers: [.command, .shift]),
-			menuCommand(title: NSLocalizedString("Open in Browser", comment: "Command"), action: "openInBrowser:", input: UIKeyCommand.inputRightArrow, modifiers: [.command]),
-			menuCommand(title: NSLocalizedString("Get Feed Info", comment: "Command"), action: "showFeedInspector:", input: "i", modifiers: [.command])
+			menuCommand(title: NSLocalizedString("Show Reader View", comment: "Command"), action: #selector(AppCommandResponder.toggleReaderView(_:)), input: "r", modifiers: [.command, .shift]),
+			menuCommand(title: NSLocalizedString("Open in Browser", comment: "Command"), action: #selector(AppCommandResponder.openInBrowser(_:)), input: UIKeyCommand.inputRightArrow, modifiers: [.command]),
+			menuCommand(title: NSLocalizedString("Get Feed Info", comment: "Command"), action: #selector(AppCommandResponder.showFeedInspector(_:)), input: "i", modifiers: [.command])
 		])
 
 		let articleMenu = UIMenu(title: NSLocalizedString("Article", comment: "Command"), identifier: articleMenuIdentifier, children: [markGroup, starredGroup, readerGroup])
 		builder.insertSibling(articleMenu, afterMenu: goMenuIdentifier)
 	}
+}
+
+/// The responder-chain actions bound to the key commands and menu items above.
+///
+/// No single object conforms to this protocol; its methods are implemented
+/// piecemeal across the responder chain (the split view, feeds, timeline, and
+/// article view controllers). Declaring them here lets the tables above use
+/// `#selector`, so a misspelled or renamed action is a compile error rather than
+/// a silently dead shortcut.
+@objc private protocol AppCommandResponder {
+
+	// Global
+	func scrollOrGoToNextUnread(_ sender: Any?)
+	func scrollUp(_ sender: Any?)
+	func goToPreviousUnread(_ sender: Any?)
+	func nextUnread(_ sender: Any?)
+	func toggleRead(_ sender: Any?)
+	func markAllAsRead(_ sender: Any?)
+	func markUnreadAndGoToNextUnread(_ sender: Any?)
+	func markAllAsReadAndGoToNextUnread(_ sender: Any?)
+	func markOlderArticlesAsRead(_ sender: Any?)
+	func markAboveAsRead(_ sender: Any?)
+	func markBelowAsRead(_ sender: Any?)
+	func openInBrowser(_ sender: Any?)
+	func openInAppBrowser(_ sender: Any?)
+	func openInBrowserUsingOppositeOfSettings(_ sender: Any?)
+	func goToPreviousSubscription(_ sender: Any?)
+	func goToNextSubscription(_ sender: Any?)
+	func toggleStarred(_ sender: Any?)
+	func goToSettings(_ sender: Any?)
+
+	// Sidebar / Timeline / Detail
+	func selectNextUp(_ sender: Any?)
+	func selectNextDown(_ sender: Any?)
+	func navigateToTimeline(_ sender: Any?)
+	func navigateToSidebar(_ sender: Any?)
+	func navigateToDetail(_ sender: Any?)
+	func collapseSelectedRows(_ sender: Any?)
+	func expandSelectedRows(_ sender: Any?)
+	func collapseAllExceptForGroupItems(_ sender: Any?)
+	func expandAll(_ sender: Any?)
+	func delete(_ sender: Any?)
+
+	// File
+	func importOPML(_ sender: Any?)
+	func exportOPML(_ sender: Any?)
+	func refresh(_ sender: Any?)
+	func addNewFeed(_ sender: Any?)
+	func addNewFolder(_ sender: Any?)
+
+	// Find
+	func articleSearch(_ sender: Any?)
+	func beginFind(_ sender: Any?)
+
+	// View
+	func sortByNewestArticleOnTop(_ sender: Any?)
+	func sortByOldestArticleOnTop(_ sender: Any?)
+	func groupByFeedToggled(_ sender: Any?)
+	func cleanUp(_ sender: Any?)
+	func toggleReadArticlesFilter(_ sender: Any?)
+	func toggleReadFeedsFilter(_ sender: Any?)
+
+	// Go
+	func goToToday(_ sender: Any?)
+	func goToAllUnread(_ sender: Any?)
+	func goToStarred(_ sender: Any?)
+
+	// Article
+	func toggleReaderView(_ sender: Any?)
+	func showFeedInspector(_ sender: Any?)
 }
