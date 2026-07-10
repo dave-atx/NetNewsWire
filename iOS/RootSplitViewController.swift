@@ -78,10 +78,6 @@ final class RootSplitViewController: UISplitViewController {
 		coordinator.selectNextUnread()
 	}
 
-	@objc func markRead(_ sender: Any?) {
-		coordinator.markAsReadForCurrentArticle()
-	}
-
 	@objc func markUnreadAndGoToNextUnread(_ sender: Any?) {
 		coordinator.markAsUnreadForCurrentArticle()
 		coordinator.selectNextUnread()
@@ -99,10 +95,6 @@ final class RootSplitViewController: UISplitViewController {
 
 	@objc func markBelowAsRead(_ sender: Any?) {
 		coordinator.markBelowAsRead()
-	}
-
-	@objc func markUnread(_ sender: Any?) {
-		coordinator.markAsUnreadForCurrentArticle()
 	}
 
 	@objc func goToPreviousSubscription(_ sender: Any?) {
@@ -234,7 +226,7 @@ final class RootSplitViewController: UISplitViewController {
 
 	override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
 		switch action {
-		case #selector(toggleRead(_:)), #selector(markRead(_:)), #selector(markUnread(_:)), #selector(toggleStarred(_:)),
+		case #selector(toggleRead(_:)), #selector(toggleStarred(_:)),
 			 #selector(openInBrowser(_:)), #selector(openInAppBrowser(_:)), #selector(openInBrowserUsingOppositeOfSettings(_:)),
 			 #selector(markUnreadAndGoToNextUnread(_:)), #selector(toggleReaderView(_:)), #selector(beginFind(_:)):
 			return coordinator.currentArticle != nil
