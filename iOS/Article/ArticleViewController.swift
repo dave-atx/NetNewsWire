@@ -104,9 +104,11 @@ final class ArticleViewController: UIViewController {
 
 	var restoreState: State?
 
-	private let keyboardManager = KeyboardManager(type: .detail)
 	override var keyCommands: [UIKeyCommand]? {
-		return keyboardManager.keyCommands
+		guard !UIResponder.isFirstResponderTextField else {
+			return nil
+		}
+		return AppCommands.detailKeyCommands()
 	}
 
 	override func viewDidLoad() {

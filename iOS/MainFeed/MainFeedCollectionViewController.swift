@@ -35,7 +35,6 @@ final class MainFeedCollectionViewController: UICollectionViewController, Undoab
 
 	private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "MainFeedCollectionViewController")
 
-	private let keyboardManager = KeyboardManager(type: .sidebar)
 	override var keyCommands: [UIKeyCommand]? {
 
 		// If the first responder is the WKWebView (PreloadedWebView) we don't want to supply any keyboard
@@ -44,8 +43,11 @@ final class MainFeedCollectionViewController: UICollectionViewController, Undoab
 		guard let current = UIResponder.currentFirstResponder, !(current is PreloadedWebView) else {
 			return nil
 		}
+		guard !UIResponder.isFirstResponderTextField else {
+			return nil
+		}
 
-		return keyboardManager.keyCommands
+		return AppCommands.sidebarKeyCommands()
 	}
 
 	override var canBecomeFirstResponder: Bool {
