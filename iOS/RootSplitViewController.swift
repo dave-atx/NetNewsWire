@@ -8,10 +8,19 @@
 
 import UIKit
 import Account
+import Articles
+import RSCore
 
 final class RootSplitViewController: UISplitViewController {
 
 	var coordinator: SceneCoordinator!
+
+	override var keyCommands: [UIKeyCommand]? {
+		guard !UIResponder.isFirstResponderTextField else {
+			return nil
+		}
+		return AppCommands.globalKeyCommands()
+	}
 
 	override var prefersStatusBarHidden: Bool {
 		return coordinator.prefersStatusBarHidden
@@ -130,10 +139,12 @@ final class RootSplitViewController: UISplitViewController {
 
 	@objc func toggleReadFeedsFilter(_ sender: Any?) {
 		coordinator.toggleReadFeedsFilter()
+		UIMenuSystem.main.setNeedsRebuild()
 	}
 
 	@objc func toggleReadArticlesFilter(_ sender: Any?) {
 		coordinator.toggleReadArticlesFilter()
+		UIMenuSystem.main.setNeedsRebuild()
 	}
 
 	@objc func refresh(_ sender: Any?) {
@@ -162,5 +173,134 @@ final class RootSplitViewController: UISplitViewController {
 
 	@objc func toggleStarred(_ sender: Any?) {
 		coordinator.toggleStarredForCurrentArticle()
+	}
+
+	@objc func markAllAsRead(_ sender: Any?) {
+		let title = NSLocalizedString("Mark All as Read", comment: "Command")
+		MarkAsReadAlertController.confirm(self, coordinator: coordinator, confirmTitle: title, sourceType: view) { [weak self] in
+			self?.coordinator.markAllAsReadInTimeline()
+		}
+	}
+
+	@objc func markOlderArticlesAsRead(_ sender: Any?) {
+		if coordinator.sortDirection == .orderedDescending {
+			coordinator.markBelowAsRead()
+		} else {
+			coordinator.markAboveAsRead()
+		}
+	}
+
+	@objc func openInBrowserUsingOppositeOfSettings(_ sender: Any?) {
+		coordinator.openInBrowserUsingOppositeOfSettings()
+	}
+
+	@objc override func toggleSidebar(_ sender: Any?) {
+		if displayMode == .secondaryOnly || displayMode == .oneBesideSecondary {
+			preferredDisplayMode = .twoBesideSecondary
+		} else {
+			preferredDisplayMode = .oneBesideSecondary
+		}
+	}
+
+	@objc func sortByNewestArticleOnTop(_ sender: Any?) {
+		AppDefaults.shared.timelineSortDirection = .orderedDescending
+		UIMenuSystem.main.setNeedsRebuild()
+	}
+
+	@objc func sortByOldestArticleOnTop(_ sender: Any?) {
+		AppDefaults.shared.timelineSortDirection = .orderedAscending
+		UIMenuSystem.main.setNeedsRebuild()
+	}
+
+	@objc func groupByFeedToggled(_ sender: Any?) {
+		AppDefaults.shared.timelineGroupByFeed.toggle()
+		UIMenuSystem.main.setNeedsRebuild()
+	}
+
+	@objc func showFeedInspector(_ sender: Any?) {
+		coordinator.showFeedInspector()
+	}
+
+	@objc func toggleReaderView(_ sender: Any?) {
+		coordinator.toggleReaderView()
+	}
+
+	@objc func beginFind(_ sender: Any?) {
+		coordinator.beginFindInArticle()
+	}
+
+	@objc func importOPML(_ sender: Any?) {
+		coordinator.importOPML()
+	}
+
+	@objc func exportOPML(_ sender: Any?) {
+		coordinator.exportOPML()
+	}
+
+	// MARK: - Menu Validation
+
+	override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+		switch action {
+		case #selector(toggleRead(_:)), #selector(markRead(_:)), #selector(markUnread(_:)), #selector(toggleStarred(_:)),
+			 #selector(openInBrowser(_:)), #selector(openInAppBrowser(_:)), #selector(openInBrowserUsingOppositeOfSettings(_:)),
+			 #selector(markUnreadAndGoToNextUnread(_:)), #selector(toggleReaderView(_:)), #selector(beginFind(_:)):
+			return coordinator.currentArticle != nil
+		case #selector(markAboveAsRead(_:)):
+			guard let currentArticle = coordinator.currentArticle else {
+				return false
+			}
+			return coordinator.canMarkAboveAsRead(for: currentArticle)
+		case #selector(markBelowAsRead(_:)):
+			guard let currentArticle = coordinator.currentArticle else {
+				return false
+			}
+			return coordinator.canMarkBelowAsRead(for: currentArticle)
+		case #selector(markOlderArticlesAsRead(_:)):
+			guard let currentArticle = coordinator.currentArticle else {
+				return false
+			}
+			if coordinator.sortDirection == .orderedDescending {
+				return coordinator.canMarkBelowAsRead(for: currentArticle)
+			} else {
+				return coordinator.canMarkAboveAsRead(for: currentArticle)
+			}
+		case #selector(nextUnread(_:)):
+			return coordinator.isNextUnreadAvailable
+		case #selector(scrollOrGoToNextUnread(_:)):
+			return coordinator.currentArticle != nil || coordinator.isNextUnreadAvailable
+		case #selector(markAllAsRead(_:)), #selector(markAllAsReadAndGoToNextUnread(_:)):
+			return coordinator.isTimelineUnreadAvailable
+		case #selector(showFeedInspector(_:)):
+			return coordinator.timelineFeed as? Feed != nil || coordinator.currentArticle?.feed != nil
+		default:
+			return super.canPerformAction(action, withSender: sender)
+		}
+	}
+
+	override func validate(_ command: UICommand) {
+		super.validate(command)
+
+		switch command.action {
+		case #selector(toggleRead(_:)):
+			command.title = coordinator.currentArticle?.status.read ?? false ?
+				NSLocalizedString("Mark as Unread", comment: "Command") :
+				NSLocalizedString("Mark as Read", comment: "Command")
+		case #selector(toggleStarred(_:)):
+			command.title = coordinator.currentArticle?.status.starred ?? false ?
+				NSLocalizedString("Mark as Unstarred", comment: "Command") :
+				NSLocalizedString("Mark as Starred", comment: "Command")
+		case #selector(groupByFeedToggled(_:)):
+			command.state = AppDefaults.shared.timelineGroupByFeed ? .on : .off
+		case #selector(sortByNewestArticleOnTop(_:)):
+			command.state = AppDefaults.shared.timelineSortDirection == .orderedDescending ? .on : .off
+		case #selector(sortByOldestArticleOnTop(_:)):
+			command.state = AppDefaults.shared.timelineSortDirection == .orderedAscending ? .on : .off
+		case #selector(toggleReadArticlesFilter(_:)):
+			command.state = coordinator.isReadArticlesFiltered ? .on : .off
+		case #selector(toggleReadFeedsFilter(_:)):
+			command.state = coordinator.isReadFeedsFiltered ? .on : .off
+		default:
+			break
+		}
 	}
 }
