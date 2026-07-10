@@ -76,6 +76,10 @@ import UIKit
 	}
 
 	static func buildMenus(with builder: UIMenuBuilder) {
+		// NetNewsWire has no rich-text editing, and Format’s Italic (⌘I)
+		// conflicts with Get Feed Info. The macOS app has no Format menu either.
+		builder.remove(menu: .format)
+
 		fileMenu(builder)
 		findMenu(builder)
 		let hasViewMenu = builder.menu(for: .view) != nil
@@ -144,11 +148,12 @@ private extension AppCommands {
 			menuCommand(title: NSLocalizedString("Find in Article", comment: "Command"), action: "beginFind:", input: "f", modifiers: [.command])
 		]
 
+		// Replace the system Find menu: its Find (⌘F) and Find & Replace (⌥⌘F)
+		// conflict with Find in Article and Article Search.
+		let findMenu = UIMenu(title: NSLocalizedString("Find", comment: "Command"), identifier: findMenuIdentifier, children: findElements)
 		if builder.menu(for: .find) != nil {
-			let findGroup = UIMenu(title: "", options: .displayInline, children: findElements)
-			builder.insertChild(findGroup, atStartOfMenu: .find)
+			builder.replace(menu: .find, with: findMenu)
 		} else {
-			let findMenu = UIMenu(title: NSLocalizedString("Find", comment: "Command"), identifier: findMenuIdentifier, children: findElements)
 			builder.insertChild(findMenu, atEndOfMenu: .edit)
 		}
 	}
@@ -169,16 +174,13 @@ private extension AppCommands {
 			menuCommand(title: NSLocalizedString("Hide Read Feeds", comment: "Command"), action: "toggleReadFeedsFilter:", input: "f", modifiers: [.command, .shift])
 		])
 
-		let toggleSidebarGroup = UIMenu(title: "", options: .displayInline, children: [
-			menuCommand(title: NSLocalizedString("Toggle Sidebar", comment: "Command"), action: "toggleSidebar:", input: "s", modifiers: [.command, .control])
-		])
-
+		// No Toggle Sidebar item: the system View menu already provides
+		// Show Sidebar (⌃⌘S) bound to toggleSidebar:.
 		if hasViewMenu {
-			builder.insertChild(toggleSidebarGroup, atStartOfMenu: .view)
 			builder.insertChild(cleanUpGroup, atStartOfMenu: .view)
 			builder.insertChild(topGroup, atStartOfMenu: .view)
 		} else {
-			let viewMenu = UIMenu(title: NSLocalizedString("View", comment: "Command"), identifier: viewMenuIdentifier, children: [topGroup, cleanUpGroup, toggleSidebarGroup])
+			let viewMenu = UIMenu(title: NSLocalizedString("View", comment: "Command"), identifier: viewMenuIdentifier, children: [topGroup, cleanUpGroup])
 			builder.insertSibling(viewMenu, afterMenu: .edit)
 		}
 	}
