@@ -58,10 +58,10 @@ final class DetailWebViewController: NSViewController {
 
 	private var webInspectorEnabled: Bool {
 		get {
-			return webView.configuration.preferences._developerExtrasEnabled
+			return webView.isInspectable
 		}
 		set {
-			webView.configuration.preferences._developerExtrasEnabled = newValue
+			webView.isInspectable = newValue
 		}
 	}
 
@@ -311,7 +311,7 @@ private extension DetailWebViewController {
 		webView.navigationDelegate = self
 		webView.keyboardDelegate = keyboardDelegate
 		webView.autoresizingMask = [.width, .height]
-		webView.configuration.preferences._developerExtrasEnabled = AppDefaults.shared.webInspectorEnabled
+		webView.isInspectable = AppDefaults.shared.webInspectorEnabled
 
 		return webView
 	}
