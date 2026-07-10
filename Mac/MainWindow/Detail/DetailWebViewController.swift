@@ -54,10 +54,10 @@ final class DetailWebViewController: NSViewController {
 
 	private var webInspectorEnabled: Bool {
 		get {
-			return webView.configuration.preferences._developerExtrasEnabled
+			return webView.isInspectable
 		}
 		set {
-			webView.configuration.preferences._developerExtrasEnabled = newValue
+			webView.isInspectable = newValue
 		}
 	}
 
