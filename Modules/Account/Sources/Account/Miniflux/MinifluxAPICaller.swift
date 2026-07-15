@@ -20,6 +20,9 @@ import Secrets
 
 	private static let minimumVersion = MinifluxVersion(2, 3, 2)
 
+	private static let feedFieldsQueryItem = URLQueryItem(name: "fields", value: "id,feed_url,site_url,title,category.id,category.title")
+	private static let entryFieldsQueryItem = URLQueryItem(name: "fields", value: "id,feed_id,title,url,author,content,published_at,enclosures.url,enclosures.mime_type,status,starred")
+
 	private let session = URLSession.webservice
 	private var suspended = false
 
@@ -108,7 +111,7 @@ import Secrets
 	}
 
 	func retrieveFeeds() async throws -> [MinifluxFeed] {
-		try await fetch("feeds")
+		try await fetch("feeds", query: [Self.feedFieldsQueryItem])
 	}
 
 	/// On failure, attempts to decode a `MinifluxErrorResponse` from the response body to distinguish
@@ -142,7 +145,7 @@ import Secrets
 	}
 
 	func retrieveFeed(feedID: Int64) async throws -> MinifluxFeed {
-		try await fetch("feeds/\(feedID)")
+		try await fetch("feeds/\(feedID)", query: [Self.feedFieldsQueryItem])
 	}
 
 	func renameFeed(feedID: Int64, title: String) async throws {
@@ -176,7 +179,7 @@ import Secrets
 	/// Returns `nil` if the entry has been removed server-side.
 	func retrieveEntry(entryID: Int64) async throws -> MinifluxEntry? {
 		do {
-			return try await fetch("entries/\(entryID)")
+			return try await fetch("entries/\(entryID)", query: [Self.entryFieldsQueryItem])
 		} catch {
 			if case WebserviceError.httpError(let status) = error, status == HTTPResponseCode.notFound {
 				return nil
@@ -265,6 +268,7 @@ private extension MinifluxAPICaller {
 
 	static func entriesPageQueryItems(offset: Int) -> [URLQueryItem] {
 		[
+			entryFieldsQueryItem,
 			URLQueryItem(name: "order", value: "id"),
 			URLQueryItem(name: "direction", value: "asc"),
 			URLQueryItem(name: "limit", value: String(entriesPageSize)),
