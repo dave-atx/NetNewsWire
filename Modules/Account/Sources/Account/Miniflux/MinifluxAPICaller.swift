@@ -12,7 +12,7 @@ import Secrets
 
 @MainActor final class MinifluxAPICaller {
 
-	// No server-side cap on limit for /v1/entries, so page generously.
+	// Miniflux rejects limit values above 1000 for /v1/entries with HTTP 400, so stay under that.
 	static let entriesPageSize = 500
 	// Miniflux caps /v1/entries/ids at MaxEntryIDsLimit (10000) per response, so page at that size.
 	static let entryIDsPageSize = 10000
