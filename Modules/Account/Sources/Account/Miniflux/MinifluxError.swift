@@ -26,9 +26,9 @@ enum MinifluxError: LocalizedError {
 		switch self {
 		case .serverVersionTooOld(let foundVersion):
 			guard let foundVersion else {
-				return NSLocalizedString("NetNewsWire requires Miniflux 2.3.2 or later.", comment: "Server version too old")
+				return NSLocalizedString("NetNewsWire requires Miniflux 2.0.49 or later.", comment: "Server version too old")
 			}
-			let localizedText = NSLocalizedString("This Miniflux server is version %@, but NetNewsWire requires Miniflux 2.3.2 or later.", comment: "Server version too old")
+			let localizedText = NSLocalizedString("This Miniflux server is version %@, but NetNewsWire requires Miniflux 2.0.49 or later.", comment: "Server version too old")
 			return NSString.localizedStringWithFormat(localizedText as NSString, foundVersion) as String
 		case .serverError(let message):
 			let localizedText = NSLocalizedString("The Miniflux server reported an error: %@", comment: "Server error")

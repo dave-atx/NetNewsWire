@@ -18,7 +18,10 @@ import Secrets
 	static let entryIDsPageSize = 10000
 	static let statusChunkSize = 1000
 
-	private static let minimumVersion = MinifluxVersion(2, 3, 2)
+	private static let minimumVersion = MinifluxVersion(2, 0, 49)
+	// /v1/entries/ids and batch starred updates require this newer version; below it,
+	// MinifluxAPICaller transparently falls back to paged /v1/entries and per-entry toggles.
+	private static let entryIDsMinimumVersion = MinifluxVersion(2, 3, 2)
 
 	private static let feedFieldsQueryItem = URLQueryItem(name: "fields", value: "id,feed_url,site_url,title,category.id,category.title")
 	private static let entryFieldsQueryItem = URLQueryItem(name: "fields", value: "id,feed_id,title,url,author,content,published_at,enclosures.url,enclosures.mime_type,status,starred")
@@ -83,6 +86,22 @@ import Secrets
 		try await validateServerVersion(endpoint: endpoint)
 
 		return validatedCredentials
+	}
+
+	/// Re-detects the server version and persists it to account settings, so
+	/// `supportsEntryIDsEndpoint`/`supportsBatchStarredUpdates` pick up a server upgrade
+	/// without the account being recreated. Called once per `refreshAll()`, from a point
+	/// where `accountSettings` is guaranteed set. Best-effort: any failure just leaves the
+	/// previously detected version (if any) in place, and gating already treats an unknown
+	/// version conservatively.
+	func detectServerVersion() async {
+		guard let apiBaseURL else {
+			return
+		}
+		guard let response = try? await fetchVersionResponse(endpoint: apiBaseURL) else {
+			return
+		}
+		accountSettings?.detectedServerVersion = response.version
 	}
 
 	func retrieveCategories() async throws -> [MinifluxCategory] {
@@ -200,9 +219,19 @@ import Secrets
 		try await updateEntries(entryIDs: entryIDs, payload: MinifluxUpdateEntriesPayload(entryIDs: entryIDs, status: read ? "read" : "unread", starred: nil))
 	}
 
-	/// Requires Miniflux 2.3.2 or later. `starred` is absolute state, not a toggle.
+	/// Uses the batch endpoint on servers that support it (2.3.2+), where `starred` is
+	/// absolute state, not a toggle. Older servers (down to the 2.0.49 floor) only expose a
+	/// per-entry bookmark *toggle* (`PUT /v1/entries/{id}/bookmark`), which flips state
+	/// rather than setting it — see `updateEntriesStarredFallback`.
 	func updateEntries(entryIDs: [Int64], starred: Bool) async throws {
-		try await updateEntries(entryIDs: entryIDs, payload: MinifluxUpdateEntriesPayload(entryIDs: entryIDs, status: nil, starred: starred))
+		guard !entryIDs.isEmpty else {
+			return
+		}
+		if supportsBatchStarredUpdates {
+			try await updateEntries(entryIDs: entryIDs, payload: MinifluxUpdateEntriesPayload(entryIDs: entryIDs, status: nil, starred: starred))
+		} else {
+			try await updateEntriesStarredFallback(entryIDs: entryIDs, starred: starred)
+		}
 	}
 
 	/// Synchronous — Miniflux’s OPML import doesn’t require polling for completion.
@@ -236,9 +265,15 @@ private extension MinifluxAPICaller {
 		return result
 	}
 
-	/// Pages through `/v1/entries/ids` — which caps each response at `entryIDsPageSize` — and
-	/// returns the complete set. `filter` is `status=unread`, `starred=true`, etc.
+	/// Pages through `/v1/entries/ids` on servers that support it (2.3.2+), which caps each
+	/// response at `entryIDsPageSize`; older servers (down to the 2.0.49 floor) fall back to
+	/// paging `/v1/entries` instead. `filter` is `status=unread`, `starred=true`, etc. — the
+	/// same filter works on both endpoints.
 	func retrieveEntryIDs(matching filter: [URLQueryItem]) async throws -> Set<Int64> {
+		guard supportsEntryIDsEndpoint else {
+			return try await retrieveEntryIDsByPagingEntries(matching: filter)
+		}
+
 		var entryIDs = Set<Int64>()
 		var offset = 0
 
@@ -259,11 +294,54 @@ private extension MinifluxAPICaller {
 		return entryIDs
 	}
 
+	/// Fallback for servers below `entryIDsMinimumVersion`, which lack `/v1/entries/ids`.
+	/// Used only for the initial sync's one-time reconciliation (see
+	/// `MinifluxAccountDelegate.reconcileAllArticleStatuses`) — never on routine refreshes —
+	/// so a full paginated scan here is a one-time cost, not a recurring one.
+	func retrieveEntryIDsByPagingEntries(matching filter: [URLQueryItem]) async throws -> Set<Int64> {
+		var entryIDs = Set<Int64>()
+		var offset = 0
+
+		while true {
+			let response: MinifluxEntriesResponse = try await fetch("entries", query: filter + Self.entriesPageQueryItems(offset: offset))
+			entryIDs.formUnion(response.entries.map { $0.entryID })
+			offset += response.entries.count
+			if response.entries.isEmpty || offset >= response.total {
+				break
+			}
+		}
+
+		return entryIDs
+	}
+
 	func updateEntries(entryIDs: [Int64], payload: MinifluxUpdateEntriesPayload) async throws {
 		guard !entryIDs.isEmpty else {
 			return
 		}
 		try await session.send(request: makeRequest(path: "entries"), method: HTTPMethod.put, payload: payload)
+	}
+
+	/// Fallback for servers below `entryIDsMinimumVersion`: fetches each entry's current
+	/// starred state and only calls the toggle when it actually differs from `starred`.
+	/// This is the important part — the toggle endpoint flips state, so blindly calling it
+	/// on an entry already in the desired state would set it *wrong*. Fetch-then-compare
+	/// also makes retries safe: if this throws partway through and the caller resets the
+	/// whole chunk for a retry, re-running re-checks each entry's now-current state and
+	/// skips the ones already fixed, rather than toggling them a second time.
+	func updateEntriesStarredFallback(entryIDs: [Int64], starred: Bool) async throws {
+		for entryID in entryIDs {
+			guard let entry = try await retrieveEntry(entryID: entryID) else {
+				continue // Gone server-side; nothing to update.
+			}
+			guard entry.starred != starred else {
+				continue // Already correct — toggling would flip it the wrong way.
+			}
+			try await toggleBookmark(entryID: entryID)
+		}
+	}
+
+	func toggleBookmark(entryID: Int64) async throws {
+		try await session.send(request: makeRequest(path: "entries/\(entryID)/bookmark"), method: HTTPMethod.put)
 	}
 
 	static func entriesPageQueryItems(offset: Int) -> [URLQueryItem] {
@@ -281,13 +359,7 @@ private extension MinifluxAPICaller {
 	func validateServerVersion(endpoint: URL) async throws {
 		let response: MinifluxVersionResponse
 		do {
-			let callURL = endpoint.appendingPathComponent("v1/version")
-			let request = URLRequest(url: callURL, credentials: credentials)
-			let (_, versionResponse) = try await session.send(request: request, resultType: MinifluxVersionResponse.self)
-			guard let versionResponse else {
-				throw WebserviceError.noData
-			}
-			response = versionResponse
+			response = try await fetchVersionResponse(endpoint: endpoint)
 		} catch {
 			if case WebserviceError.httpError(let status) = error, status == HTTPResponseCode.notFound {
 				throw MinifluxError.serverVersionTooOld(foundVersion: nil)
@@ -301,6 +373,36 @@ private extension MinifluxAPICaller {
 		guard version >= Self.minimumVersion else {
 			throw MinifluxError.serverVersionTooOld(foundVersion: response.version)
 		}
+	}
+
+	func fetchVersionResponse(endpoint: URL) async throws -> MinifluxVersionResponse {
+		let callURL = endpoint.appendingPathComponent("v1/version")
+		let request = URLRequest(url: callURL, credentials: credentials)
+		let (_, versionResponse) = try await session.send(request: request, resultType: MinifluxVersionResponse.self)
+		guard let versionResponse else {
+			throw WebserviceError.noData
+		}
+		return versionResponse
+	}
+
+	/// `nil` until a `detectServerVersion()` call has succeeded at least once this app
+	/// session (or in a previous one, since it's persisted).
+	var detectedVersion: MinifluxVersion? {
+		accountSettings?.detectedServerVersion.flatMap(MinifluxVersion.init(string:))
+	}
+
+	/// `false` (the safe default) when the version hasn't been detected yet, failed to
+	/// parse, or is below `entryIDsMinimumVersion` — the fallback works on every server
+	/// this app supports (down to the 2.0.49 floor), so "unknown" must resolve to "fall back."
+	var supportsEntryIDsEndpoint: Bool {
+		guard let detectedVersion else {
+			return false
+		}
+		return detectedVersion >= Self.entryIDsMinimumVersion
+	}
+
+	var supportsBatchStarredUpdates: Bool {
+		supportsEntryIDsEndpoint // Same 2.3.2 threshold as the ids endpoint.
 	}
 
 	func apiURL(path: String, queryItems: [URLQueryItem] = []) throws -> URL {
