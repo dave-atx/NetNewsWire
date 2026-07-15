@@ -561,6 +561,8 @@ private extension MinifluxAccountDelegate {
 	func refreshAccount(_ account: Account) async throws {
 		do {
 			try await account.logActivity(kind: .refreshFeedList, successMessage: { "\($0.feeds) feeds, \($0.folders) folders" }, { () -> (folders: Int, feeds: Int) in
+				await self.caller.detectServerVersion()
+
 				async let pendingCategories = self.caller.retrieveCategories()
 				async let pendingFeeds = self.caller.retrieveFeeds()
 
