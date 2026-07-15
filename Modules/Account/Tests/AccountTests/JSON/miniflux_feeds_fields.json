@@ -1,0 +1,38 @@
+[
+	{
+		"id": 201,
+		"feed_url": "https://miniflux.test/feeds/fields-a.xml",
+		"site_url": "https://fields-a.example",
+		"title": "Fields Feed A",
+		"category": {
+			"id": 10,
+			"title": "All"
+		}
+	},
+	{
+		"id": 202,
+		"feed_url": "https://fields-b.example/rss.xml",
+		"site_url": "https://fields-b.example",
+		"title": "Fields Feed B",
+		"category": {
+			"id": 11,
+			"title": "Tech"
+		}
+	},
+	{
+		"id": 203,
+		"feed_url": "https://fields-c.example/feed",
+		"site_url": "https://fields-c.example",
+		"title": "Fields Feed C",
+		"category": {
+			"id": 10,
+			"title": "All"
+		}
+	},
+	{
+		"id": 204,
+		"feed_url": "https://fields-d.example/atom.xml",
+		"site_url": "https://fields-d.example",
+		"title": "Fields Feed D"
+	}
+]
