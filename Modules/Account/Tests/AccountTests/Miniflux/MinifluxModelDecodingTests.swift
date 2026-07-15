@@ -132,6 +132,87 @@ import XCTest
 		XCTAssertEqual("This feed already exists (feed_id: 123)", error.errorMessage)
 	}
 
+	// MARK: - fields= responses
+
+	func testDecodeFeedsFieldsLimited() throws {
+		let feeds = try decode([MinifluxFeed].self, from: "miniflux_feeds_fields.json")
+		XCTAssertEqual(4, feeds.count)
+
+		guard let feed = feeds.first(where: { $0.feedID == 201 }) else {
+			XCTFail("Expected feed 201")
+			return
+		}
+		XCTAssertEqual("https://miniflux.test/feeds/fields-a.xml", feed.feedURL)
+		XCTAssertEqual("https://fields-a.example", feed.siteURL)
+		XCTAssertEqual("Fields Feed A", feed.title)
+		XCTAssertEqual(10, feed.category?.categoryID)
+		XCTAssertEqual("All", feed.category?.title)
+
+		// Feed 204 has no "category" key at all — confirms lenient decoding tolerates its absence
+		// when a fields-limited server response omits it (e.g. an uncategorized feed).
+		guard let feedWithoutCategory = feeds.first(where: { $0.feedID == 204 }) else {
+			XCTFail("Expected feed 204")
+			return
+		}
+		XCTAssertNil(feedWithoutCategory.category)
+		XCTAssertEqual("Fields Feed D", feedWithoutCategory.title)
+	}
+
+	func testDecodeEntriesFieldsLimited() throws {
+		let response = try decode(MinifluxEntriesResponse.self, from: "miniflux_entries_fields.json")
+		XCTAssertEqual(4, response.total)
+		XCTAssertEqual(4, response.entries.count)
+
+		guard let withEnclosure = response.entries.first(where: { $0.entryID == 6001 }) else {
+			XCTFail("Expected entry 6001")
+			return
+		}
+		XCTAssertEqual(201, withEnclosure.feedID)
+		XCTAssertEqual("unread", withEnclosure.status)
+		XCTAssertEqual(true, withEnclosure.starred)
+		guard let enclosure = withEnclosure.enclosures?.first else {
+			XCTFail("Expected an enclosure on entry 6001")
+			return
+		}
+		XCTAssertEqual("https://media.example/fields-ep1.mp3", enclosure.url)
+		XCTAssertEqual("audio/mpeg", enclosure.mimeType)
+
+		guard let nullAuthor = response.entries.first(where: { $0.entryID == 6002 }) else {
+			XCTFail("Expected entry 6002")
+			return
+		}
+		XCTAssertNil(nullAuthor.author)
+		XCTAssertNotNil(nullAuthor.enclosures)
+		XCTAssertEqual(0, nullAuthor.enclosures?.count ?? -1)
+
+		// Entry 6003 has explicit JSON nulls for every optional field — confirms lenient
+		// decoding tolerates `null`, not just an absent key.
+		guard let allNulls = response.entries.first(where: { $0.entryID == 6003 }) else {
+			XCTFail("Expected entry 6003")
+			return
+		}
+		XCTAssertNil(allNulls.title)
+		XCTAssertNil(allNulls.url)
+		XCTAssertNil(allNulls.contentHTML)
+		XCTAssertNil(allNulls.datePublished)
+		XCTAssertNil(allNulls.parsedDatePublished)
+		// status/starred are not null in the fixture (unlike the other optional fields here).
+		XCTAssertEqual("unread", allNulls.status)
+		XCTAssertEqual(false, allNulls.starred)
+
+		// Entry 6004 omits every optional key entirely, carrying only the required ones.
+		guard let minimal = response.entries.first(where: { $0.entryID == 6004 }) else {
+			XCTFail("Expected entry 6004")
+			return
+		}
+		XCTAssertEqual(204, minimal.feedID)
+		XCTAssertNil(minimal.title)
+		XCTAssertNil(minimal.author)
+		XCTAssertNil(minimal.enclosures)
+		XCTAssertEqual("unread", minimal.status)
+		XCTAssertEqual(false, minimal.starred)
+	}
+
 	func testDecodeVersionResponse() throws {
 		let response = try decode(MinifluxVersionResponse.self, from: "miniflux_version.json")
 		XCTAssertEqual("2.3.2", response.version)
