@@ -138,6 +138,11 @@ final class AccountsMinifluxWindowController: NSWindowController {
 					return
 				}
 
+				guard account != nil || !AccountManager.shared.duplicateServiceAccount(type: .miniflux, endpointURL: apiURL) else {
+					errorMessageLabel.stringValue = NSLocalizedString("There is already a Miniflux account for this server.", comment: "Duplicate Error")
+					return
+				}
+
 				if account == nil {
 					account = AccountManager.shared.createAccount(type: .miniflux)
 				}

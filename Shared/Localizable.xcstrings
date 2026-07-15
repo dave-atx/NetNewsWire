@@ -1029,6 +1029,9 @@
     "There is already a Feedbin account with that username created." : {
       "comment" : "Duplicate Error"
     },
+    "There is already a Miniflux account for this server." : {
+      "comment" : "Duplicate Error"
+    },
     "There is already a NewsBlur account with that username created." : {
       "comment" : "Duplicate Error"
     },

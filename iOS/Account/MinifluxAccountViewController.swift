@@ -172,6 +172,11 @@ final class MinifluxAccountViewController: UITableViewController {
 					return
 				}
 
+				guard account != nil || !AccountManager.shared.duplicateServiceAccount(type: .miniflux, endpointURL: url) else {
+					showError(NSLocalizedString("There is already a Miniflux account for this server.", comment: "Duplicate Error"))
+					return
+				}
+
 				if account == nil {
 					account = AccountManager.shared.createAccount(type: .miniflux)
 				}
