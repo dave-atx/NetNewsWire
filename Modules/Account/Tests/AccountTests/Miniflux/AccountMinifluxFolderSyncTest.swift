@@ -18,6 +18,7 @@ import RSWeb
 
 	func testDownloadSync() async throws {
 
+		TestingURLProtocol.setResponse("/v1/version", file: "JSON/miniflux_version.json")
 		TestingURLProtocol.setResponse("/v1/categories", file: "JSON/miniflux_categories_initial.json")
 		TestingURLProtocol.setResponse("/v1/feeds", file: "JSON/miniflux_feeds_initial.json")
 		TestingURLProtocol.setResponse("/v1/entries/ids", file: "JSON/miniflux_entry_ids.json")
@@ -99,6 +100,7 @@ import RSWeb
 
 	func testFeedsLandInCorrectFolders() async throws {
 
+		TestingURLProtocol.setResponse("/v1/version", file: "JSON/miniflux_version.json")
 		TestingURLProtocol.setResponse("/v1/categories", file: "JSON/miniflux_categories_initial.json")
 		TestingURLProtocol.setResponse("/v1/feeds", file: "JSON/miniflux_feeds_initial.json")
 		TestingURLProtocol.setResponse("/v1/entries/ids", file: "JSON/miniflux_entry_ids.json")
