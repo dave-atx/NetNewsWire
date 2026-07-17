@@ -77,6 +77,25 @@ final class PhoneSession: NSObject {
 		}
 	}
 
+	/// Watch → phone: ask the phone to open an article URL. Interactive when the phone is
+	/// reachable; on failure or unreachability it's queued via `transferUserInfo` so the tap
+	/// isn't lost — the phone opens it (or holds it until foregrounded) on delivery.
+	func sendOpenOnPhone(urlString: String) {
+		guard let session, session.activationState == .activated else {
+			return
+		}
+		let message = WatchMessage.openOnPhoneMessage(url: urlString)
+		if session.isReachable {
+			session.sendMessage(message, replyHandler: nil) { [logger] error in
+				logger.error("openOnPhone send failed, queueing for later delivery: \(error.localizedDescription)")
+				// The dictionary isn't Sendable; rebuild it from the captured string.
+				WCSession.default.transferUserInfo(WatchMessage.openOnPhoneMessage(url: urlString))
+			}
+		} else {
+			session.transferUserInfo(message)
+		}
+	}
+
 	/// Watch → phone: flush queued status changes. Confirmed sends are removed from the
 	/// `StatusQueue`; failed or undeliverable sends are reset back to pending for retry.
 	func sendStatusBatch(_ changes: [WatchStatusChange]) {

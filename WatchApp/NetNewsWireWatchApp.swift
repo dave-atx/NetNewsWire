@@ -42,7 +42,7 @@ struct NetNewsWireWatchApp: App {
 	var body: some Scene {
 		WindowGroup {
 			NavigationStack {
-				TimelineView(store: store, coordinator: syncCoordinator)
+				TimelineView(store: store, coordinator: syncCoordinator, phoneSession: phoneSession)
 			}
 			.onChange(of: scenePhase, initial: true) { _, newPhase in
 				if newPhase == .active {

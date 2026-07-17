@@ -7,6 +7,7 @@
 //
 
 import Foundation
+import UIKit
 import WatchConnectivity
 import os
 import RSCore
@@ -58,6 +59,11 @@ import Secrets
 	private var pendingStatusChanges: [String: WatchStatusChange] = [:]
 	private var statusDebounceTask: Task<Void, Never>?
 
+	/// A watch-requested URL that arrived while the app was backgrounded — iOS silently
+	/// ignores `UIApplication.open` from the background, so it's held until the app is next
+	/// active. Latest-wins: the user's most recent request is the one they mean.
+	private var pendingOpenURL: URL?
+
 	/// Last application context sent, so unchanged configs aren't re-sent (the context is
 	/// latest-wins and persisted by WatchConnectivity, so re-sends are wasteful, not wrong).
 	private var lastSentApplicationContext: [String: Any]?
@@ -82,6 +88,7 @@ import Secrets
 		NotificationCenter.default.addObserver(self, selector: #selector(statusesDidChange(_:)), name: .StatusesDidChange, object: nil)
 		NotificationCenter.default.addObserver(self, selector: #selector(accountsDidChange(_:)), name: .UserDidAddAccount, object: nil)
 		NotificationCenter.default.addObserver(self, selector: #selector(accountsDidChange(_:)), name: .UserDidDeleteAccount, object: nil)
+		NotificationCenter.default.addObserver(self, selector: #selector(applicationDidBecomeActive(_:)), name: UIApplication.didBecomeActiveNotification, object: nil)
 	}
 
 	/// Builds a fresh snapshot (recent unread + starred, capped and deduplicated by
@@ -302,6 +309,31 @@ import Secrets
 	}
 }
 
+// MARK: - Open on iPhone
+
+@MainActor private extension WatchBridge {
+
+	func openOnPhone(urlString: String) {
+		guard let url = URL(string: urlString), let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http" else {
+			Self.logger.error("Ignoring openOnPhone request with an unusable URL")
+			return
+		}
+		if UIApplication.shared.applicationState == .active {
+			UIApplication.shared.open(url)
+		} else {
+			pendingOpenURL = url
+		}
+	}
+
+	@objc func applicationDidBecomeActive(_ note: Notification) {
+		guard let url = pendingOpenURL else {
+			return
+		}
+		pendingOpenURL = nil
+		UIApplication.shared.open(url)
+	}
+}
+
 // MARK: - Incremental status deltas (outgoing)
 
 @MainActor private extension WatchBridge {
@@ -381,9 +413,8 @@ import Secrets
 			await apply(statusBatch: batch)
 		} else if WatchMessage.isRequestSnapshot(dictionary) {
 			await buildAndSendSnapshot(force: true)
-		} else if WatchMessage.openOnPhoneURL(from: dictionary) != nil {
-			// M3: actually open the URL on the phone. For now, just note that it arrived.
-			Self.logger.info("Received an openOnPhone request; handling deferred to M3.")
+		} else if let urlString = WatchMessage.openOnPhoneURL(from: dictionary) {
+			openOnPhone(urlString: urlString)
 		} else {
 			Self.logger.debug("Dropping unrecognized watch payload.")
 		}
