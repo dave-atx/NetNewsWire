@@ -240,6 +240,13 @@ public enum FetchType {
 		}
 	}
 
+	/// The server version string most recently detected for this account, if its delegate
+	/// records one (currently only Miniflux). The watch bridge forwards this to the watch,
+	/// which runs no version detection of its own.
+	public var detectedServerVersion: String? {
+		settings.detectedServerVersion
+	}
+
 	private var fetchingAllUnreadCounts = false
 	var areUnreadCountsInitialized = false
 

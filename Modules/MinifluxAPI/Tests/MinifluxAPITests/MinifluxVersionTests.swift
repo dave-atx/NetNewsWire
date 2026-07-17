@@ -7,7 +7,7 @@
 //
 
 import XCTest
-@testable import Account
+@testable import MinifluxAPI
 
 final class MinifluxVersionTests: XCTestCase {
 

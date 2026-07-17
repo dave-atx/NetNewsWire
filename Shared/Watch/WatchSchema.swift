@@ -32,6 +32,13 @@ enum WatchSchema {
 
 		static let statusBatch = "statusBatch"
 		static let url = "url"
+
+		static let accountConfig = "accountConfig"
+		static let endpoint = "endpoint"
+		static let serverVersion = "serverVersion"
+		static let credentialType = "credentialType"
+		static let username = "username"
+		static let secret = "secret"
 	}
 }
 

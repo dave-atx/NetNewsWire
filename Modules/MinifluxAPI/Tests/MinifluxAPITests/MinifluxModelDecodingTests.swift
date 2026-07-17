@@ -7,7 +7,7 @@
 //
 
 import XCTest
-@testable import Account
+@testable import MinifluxAPI
 
 @MainActor final class MinifluxModelDecodingTests: XCTestCase {
 

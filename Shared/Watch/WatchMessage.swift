@@ -25,6 +25,12 @@ enum WatchMessageKind: String, Sendable {
 	case requestSnapshot
 	/// Watch → phone: open a URL string on the phone.
 	case openOnPhone
+	/// Phone → watch: a Miniflux credential for the direct sync path (see
+	/// `WatchCredential`). Sent via sendMessage/transferUserInfo, never the application
+	/// context.
+	case credential
+	/// Phone → watch: the account was removed; delete the watch's stored credential copy.
+	case credentialTombstone
 }
 
 /// Builders and parsers for the WCSession message dictionaries used in M1.
@@ -63,6 +69,23 @@ enum WatchMessage {
 
 	static func isRequestSnapshot(_ dictionary: [String: Any]) -> Bool {
 		kind(of: dictionary) == .requestSnapshot
+	}
+
+	// MARK: - credentialTombstone
+
+	static func credentialTombstoneMessage(accountID: String) -> [String: Any] {
+		[
+			WatchSchema.Keys.messageKind: WatchMessageKind.credentialTombstone.rawValue,
+			WatchSchema.Keys.schemaVersion: WatchSchema.version,
+			WatchSchema.Keys.accountID: accountID
+		]
+	}
+
+	static func credentialTombstoneAccountID(from dictionary: [String: Any]) -> String? {
+		guard kind(of: dictionary) == .credentialTombstone else {
+			return nil
+		}
+		return dictionary[WatchSchema.Keys.accountID] as? String
 	}
 
 	// MARK: - openOnPhone

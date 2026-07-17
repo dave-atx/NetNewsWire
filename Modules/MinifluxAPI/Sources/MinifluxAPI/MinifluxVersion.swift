@@ -1,6 +1,6 @@
 //
 //  MinifluxVersion.swift
-//  Account
+//  MinifluxAPI
 //
 //  Created by Dave Marquard on 7/8/26.
 //  Copyright © 2026 Ranchero Software, LLC. All rights reserved.

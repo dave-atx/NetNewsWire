@@ -1,6 +1,6 @@
 //
 //  MinifluxFeed.swift
-//  Account
+//  MinifluxAPI
 //
 //  Created by Dave Marquard on 7/7/26.
 //  Copyright © 2026 Ranchero Software, LLC. All rights reserved.
@@ -10,12 +10,12 @@ import Foundation
 
 // GET /v1/feeds → [{"id":311,"feed_url":"...","site_url":"...","title":"...",
 //                   "category":{"id":39,...},"icon":{"feed_id":311,...},...}]
-struct MinifluxFeed: Decodable, Sendable {
-	let feedID: Int64
-	let feedURL: String
-	let siteURL: String?
-	let title: String?
-	let category: MinifluxCategory?
+public struct MinifluxFeed: Decodable, Sendable {
+	public let feedID: Int64
+	public let feedURL: String
+	public let siteURL: String?
+	public let title: String?
+	public let category: MinifluxCategory?
 
 	enum CodingKeys: String, CodingKey {
 		case feedID = "id"
@@ -25,7 +25,7 @@ struct MinifluxFeed: Decodable, Sendable {
 		case category
 	}
 
-	init(from decoder: Decoder) throws {
+	public init(from decoder: Decoder) throws {
 		let container = try decoder.container(keyedBy: CodingKeys.self)
 		feedID = try container.decode(Int64.self, forKey: .feedID)
 		feedURL = try container.decode(String.self, forKey: .feedURL)
