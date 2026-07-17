@@ -102,6 +102,7 @@ import Images
 
 		ArticleThemesManager.shared.start()
 		NetworkMonitor.shared.start()
+		WatchBridge.shared.activate()
 
 #if !SKIP_APP_GROUP_ACCESS
 		ExtensionContainersFile.shared.start()
@@ -193,6 +194,9 @@ import Images
 		scheduleBackgroundFeedRefresh()
 		syncArticleStatus()
 		WidgetDataEncoder.shared?.encode()
+		Task {
+			await WatchBridge.shared.buildAndSendSnapshot()
+		}
 		waitForSyncTasksToFinish()
 	}
 
@@ -424,6 +428,7 @@ private extension AppDelegate {
 			await AccountManager.shared.refreshAll(errorHandler: ErrorHandler.log)
 			if !AccountManager.shared.isSuspended {
 				await WidgetDataEncoder.shared?.encodeAndWait()
+				await WatchBridge.shared.buildAndSendSnapshot()
 				self.suspendApplication()
 				Self.logger.info("Background refresh completed.")
 				task.setTaskCompleted(success: true)
