@@ -15,6 +15,7 @@ struct TimelineView: View {
 
 	var store: WatchStore
 	var coordinator: SyncCoordinator
+	var phoneSession: PhoneSession
 
 	var body: some View {
 		Group {
@@ -47,9 +48,18 @@ struct TimelineView: View {
 			}
 		}
 		.navigationDestination(for: String.self) { articleID in
-			ArticleView(articleID: articleID, store: store)
+			ArticleView(articleID: articleID, store: store, phoneSession: phoneSession)
 		}
 		.navigationTitle("NetNewsWire")
+		.toolbar {
+			ToolbarItem(placement: .topBarTrailing) {
+				NavigationLink {
+					SettingsView(coordinator: coordinator)
+				} label: {
+					Label("Settings", systemImage: "gear")
+				}
+			}
+		}
 	}
 }
 

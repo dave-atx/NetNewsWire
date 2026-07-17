@@ -7,20 +7,31 @@
 
 import SwiftUI
 
-// M1 scaffolding — see Technotes/WatchApp.md "Reading experience > Article view". M1 renders
-// a plain-text body; the block-based renderer (paragraphs, headings, links, etc.) is M3.
+// M3 — see Technotes/WatchApp.md "Reading experience > Article view". Feed-provided content
+// only (no extraction pass); the body renders as native blocks via ArticleBodyParser.
 
-/// Article reading view. Loads its content file on demand from the store and strips it to
-/// plain text off the main actor; header/footer read only the metadata already in memory.
+/// Article reading view. Loads its content file on demand from the store and parses it into
+/// `BodyBlock`s off the main actor (once, cached in view state); header/footer read only the
+/// metadata already in memory. Link taps can't open a browser on watchOS — they offer
+/// Open on iPhone or Star instead, so links never dead-end.
 struct ArticleView: View {
 
 	let articleID: String
 	var store: WatchStore
+	var phoneSession: PhoneSession
 
-	@State private var bodyText: String?
+	@State private var bodyBlocks: [BodyBlock]?
 	@State private var isLoadingBody = true
+	@State private var tappedLinkURL: URL?
 
 	@Environment(\.isLuminanceReduced) private var isLuminanceReduced
+
+	@AppStorage(WatchSettingsKeys.themeName) private var themeName = WatchTheme.defaultTheme.name
+	@AppStorage(WatchSettingsKeys.markReadOnScroll) private var markReadOnScroll = false
+
+	private var theme: WatchTheme {
+		WatchTheme.theme(named: themeName)
+	}
 
 	private var article: WatchArticleRecord? {
 		store.article(for: articleID)
@@ -33,6 +44,7 @@ struct ArticleView: View {
 					header(for: article)
 					Divider()
 					content(for: article)
+					endOfArticleSentinel(for: article)
 					Divider()
 					footer(for: article)
 				} else {
@@ -41,6 +53,20 @@ struct ArticleView: View {
 				}
 			}
 			.padding(.horizontal, 2)
+		}
+		.containerBackground(theme.backgroundColor.color, for: .navigation)
+		.confirmationDialog("Link", isPresented: isShowingLinkDialog, titleVisibility: .visible) {
+			Button("Open on iPhone") {
+				if let tappedLinkURL {
+					phoneSession.sendOpenOnPhone(urlString: tappedLinkURL.absoluteString)
+				}
+			}
+			Button("Star This Article") {
+				store.markStarred(articleID, true)
+			}
+			Button("Cancel", role: .cancel) {}
+		} message: {
+			Text(tappedLinkURL?.absoluteString ?? "")
 		}
 		.navigationTitle(article?.feedName ?? "Article")
 		.task(id: articleID) {
@@ -59,6 +85,7 @@ struct ArticleView: View {
 		VStack(alignment: .leading, spacing: 4) {
 			Text(article.title)
 				.font(.headline)
+				.foregroundStyle(theme.textColor.color)
 			HStack(spacing: 4) {
 				Text(article.feedName)
 				if let datePublished = article.datePublished {
@@ -67,7 +94,33 @@ struct ArticleView: View {
 				}
 			}
 			.font(.caption2)
-			.foregroundStyle(.secondary)
+			.foregroundStyle(theme.secondaryTextColor.color)
+		}
+	}
+
+	/// Auto-mark-read, per the design: an end-of-article sentinel whose scroll visibility
+	/// marks the article read — only when the setting is on (default is explicit marking)
+	/// and only once the body has actually rendered, so a short article doesn't get marked
+	/// by the loading placeholder's brief appearance.
+	@ViewBuilder
+	private func endOfArticleSentinel(for article: WatchArticleRecord) -> some View {
+		Color.clear
+			.frame(height: 1)
+			.onScrollVisibilityChange { visible in
+				if visible && markReadOnScroll && !isLoadingBody && !article.read {
+					store.markRead(article.articleID, true)
+				}
+			}
+	}
+
+	/// A binding for the link dialog derived from the tapped URL, cleared on dismissal.
+	private var isShowingLinkDialog: Binding<Bool> {
+		Binding {
+			tappedLinkURL != nil
+		} set: { isShowing in
+			if !isShowing {
+				tappedLinkURL = nil
+			}
 		}
 	}
 
@@ -76,9 +129,25 @@ struct ArticleView: View {
 		if isLoadingBody {
 			ProgressView()
 				.frame(maxWidth: .infinity)
+		} else if let bodyBlocks, !bodyBlocks.isEmpty {
+			// Long articles are hundreds of blocks — build rows lazily, per the design.
+			LazyVStack(alignment: .leading, spacing: 8) {
+				ForEach(bodyBlocks) { block in
+					BodyBlockView(block: block, theme: theme)
+				}
+			}
+			.fontDesign(theme.bodyFont.fontDesign)
+			.foregroundStyle(theme.textColor.color)
+			.tint(theme.linkColor.color)
+			.environment(\.openURL, OpenURLAction { url in
+				tappedLinkURL = url
+				return .handled
+			})
 		} else {
-			Text(bodyText?.isEmpty == false ? bodyText ?? article.textPreview : article.textPreview)
+			Text(article.textPreview)
 				.font(.body)
+				.fontDesign(theme.bodyFont.fontDesign)
+				.foregroundStyle(theme.textColor.color)
 		}
 	}
 
@@ -98,21 +167,23 @@ struct ArticleView: View {
 			.handGestureShortcut(.primaryAction)
 
 			Button {
-				store.markRead(article.articleID, false)
+				store.markRead(article.articleID, !article.read)
 			} label: {
-				Label("Mark Unread", systemImage: "circle")
+				Label(article.read ? "Mark Unread" : "Mark Read", systemImage: article.read ? "circle" : "checkmark.circle")
 					.frame(maxWidth: .infinity)
 			}
-			.disabled(!article.read)
+			.tint(theme.accentColor.color)
 
 			Button {
-				// TODO(M3): send WatchMessage.openOnPhoneMessage(url:) via PhoneSession
-				// when the phone is reachable, else queue via transferUserInfo.
+				if let url = article.url {
+					phoneSession.sendOpenOnPhone(urlString: url)
+				}
 			} label: {
 				Label("Open on iPhone", systemImage: "iphone")
 					.frame(maxWidth: .infinity)
 			}
-			.disabled(true)
+			.tint(theme.accentColor.color)
+			.disabled(article.url == nil)
 		}
 		.buttonStyle(.bordered)
 	}
@@ -121,124 +192,65 @@ struct ArticleView: View {
 		isLoadingBody = true
 		defer { isLoadingBody = false }
 		let url = store.contentFileURL(for: articleID)
-		bodyText = await ArticleBodyPlainTextConverter.plainText(contentsOf: url)
+		bodyBlocks = await ArticleBodyParser.blocks(contentsOf: url)
 	}
 }
 
-/// Converts an article's stored `contentHTML` into plain, readable text: strips tags and
-/// decodes entities. No layout, no links, no block structure.
-///
-/// TODO(M3): replace with the block-based renderer described in Technotes/WatchApp.md
-/// ("Article view") — an `ArticleBodyParser` producing `[BodyBlock]` (paragraphs, headings,
-/// lists, code blocks, preserved link ranges) rendered as `AttributedString` per block.
-enum ArticleBodyPlainTextConverter {
+/// Renders one parsed `BodyBlock`. Text color and font design arrive from the enclosing
+/// container; the theme is passed in for the accents (quote bar, list markers, secondary
+/// text) that differ per block kind.
+struct BodyBlockView: View {
 
-	static func plainText(contentsOf url: URL) async -> String? {
-		await Task.detached(priority: .userInitiated) {
-			guard let data = try? Data(contentsOf: url), let html = String(data: data, encoding: .utf8) else {
-				return nil
+	let block: BodyBlock
+	let theme: WatchTheme
+
+	var body: some View {
+		switch block.kind {
+		case .paragraph(let text):
+			Text(text)
+				.font(.body)
+		case .heading(let level, let text):
+			Text(text)
+				.font(level <= 2 ? .headline : .subheadline.weight(.semibold))
+				.padding(.top, 4)
+		case .blockquote(let text):
+			HStack(alignment: .top, spacing: 6) {
+				Rectangle()
+					.fill(theme.accentColor.color)
+					.frame(width: 2)
+				Text(text)
+					.font(.body)
+					.italic()
+					.foregroundStyle(theme.secondaryTextColor.color)
 			}
-			return plainText(fromHTML: html)
-		}.value
-	}
-
-	static func plainText(fromHTML html: String) -> String {
-		let withoutScriptsAndStyles = removingScriptsAndStyles(from: html)
-		let withLineBreaks = insertingLineBreaks(into: withoutScriptsAndStyles)
-		let stripped = strippingTags(from: withLineBreaks)
-		let decoded = decodingEntities(in: stripped)
-		return collapsingWhitespace(in: decoded)
-	}
-
-	private static func removingScriptsAndStyles(from html: String) -> String {
-		var result = html
-		for tag in ["script", "style"] {
-			let pattern = "(?is)<\(tag)\\b[^>]*>.*?</\(tag)>"
-			result = result.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
-		}
-		return result
-	}
-
-	private static func insertingLineBreaks(into html: String) -> String {
-		html.replacingOccurrences(of: "(?i)</?(p|br|div|li|h[1-6]|blockquote)[^>]*>", with: "\n", options: .regularExpression)
-	}
-
-	private static func strippingTags(from html: String) -> String {
-		var result = ""
-		result.reserveCapacity(html.count)
-		var isInsideTag = false
-		for character in html {
-			switch character {
-			case "<":
-				isInsideTag = true
-			case ">":
-				isInsideTag = false
-			default:
-				if !isInsideTag {
-					result.append(character)
+			.fixedSize(horizontal: false, vertical: true)
+		case .list(let items, let ordered):
+			VStack(alignment: .leading, spacing: 4) {
+				// Blocks are immutable once parsed, so positional identity is stable here.
+				ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+					HStack(alignment: .top, spacing: 4) {
+						Text(ordered ? "\(index + 1)." : "•")
+							.foregroundStyle(theme.secondaryTextColor.color)
+						Text(item)
+					}
+					.font(.body)
 				}
 			}
-		}
-		return result
-	}
-
-	private static let namedEntities: [Substring: Character] = [
-		"amp": "&", "lt": "<", "gt": ">", "quot": "\"", "apos": "'",
-		"nbsp": "\u{00A0}", "mdash": "\u{2014}", "ndash": "\u{2013}",
-		"hellip": "\u{2026}", "lsquo": "\u{2018}", "rsquo": "\u{2019}",
-		"ldquo": "\u{201C}", "rdquo": "\u{201D}", "copy": "\u{00A9}"
-	]
-
-	private static func decodingEntities(in string: String) -> String {
-		guard string.contains("&") else {
-			return string
-		}
-
-		var result = ""
-		result.reserveCapacity(string.count)
-		var index = string.startIndex
-
-		while index < string.endIndex {
-			let character = string[index]
-			guard character == "&", let semicolonIndex = string[index...].firstIndex(of: ";") else {
-				result.append(character)
-				index = string.index(after: index)
-				continue
+		case .code(let code):
+			Text(code)
+				.font(.system(.footnote, design: .monospaced))
+				.padding(6)
+				.frame(maxWidth: .infinity, alignment: .leading)
+				.background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+		case .image(let altText):
+			// v1 skips inline images — placeholder glyph with alt text, per the design.
+			HStack(spacing: 4) {
+				Image(systemName: "photo")
+				Text(altText.isEmpty ? "Image" : altText)
+					.lineLimit(2)
 			}
-
-			let entity = string[string.index(after: index)..<semicolonIndex]
-			if let scalar = numericScalar(for: entity) {
-				result.append(Character(scalar))
-			} else if let named = namedEntities[entity] {
-				result.append(named)
-			} else {
-				result.append(contentsOf: string[index...semicolonIndex])
-			}
-			index = string.index(after: semicolonIndex)
+			.font(.caption2)
+			.foregroundStyle(theme.secondaryTextColor.color)
 		}
-
-		return result
-	}
-
-	private static func numericScalar(for entity: Substring) -> Unicode.Scalar? {
-		if entity.hasPrefix("#x") || entity.hasPrefix("#X") {
-			guard let value = UInt32(entity.dropFirst(2), radix: 16) else {
-				return nil
-			}
-			return Unicode.Scalar(value)
-		}
-		if entity.hasPrefix("#") {
-			guard let value = UInt32(entity.dropFirst()) else {
-				return nil
-			}
-			return Unicode.Scalar(value)
-		}
-		return nil
-	}
-
-	private static func collapsingWhitespace(in string: String) -> String {
-		let collapsedSpaces = string.replacingOccurrences(of: "[ \\t]+", with: " ", options: .regularExpression)
-		let collapsedBlankLines = collapsedSpaces.replacingOccurrences(of: "\\n{3,}", with: "\n\n", options: .regularExpression)
-		return collapsedBlankLines.trimmingCharacters(in: .whitespacesAndNewlines)
 	}
 }
