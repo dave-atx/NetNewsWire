@@ -31,6 +31,7 @@ final class PhoneSession: NSObject {
 
 	private let store: WatchStore
 	private let statusQueue: StatusQueue
+	private let directSyncSettings: DirectSyncSettings
 	private let session: WCSession?
 
 	// WCSessionDelegate callbacks arrive off the main actor; a nonisolated Logger (a plain
@@ -41,9 +42,10 @@ final class PhoneSession: NSObject {
 	/// userInfoTransfer:error:)` can confirm delivery back to the `StatusQueue`.
 	private var pendingUserInfoTransfers: [ObjectIdentifier: [WatchStatusChange]] = [:]
 
-	init(store: WatchStore, statusQueue: StatusQueue) {
+	init(store: WatchStore, statusQueue: StatusQueue, directSyncSettings: DirectSyncSettings) {
 		self.store = store
 		self.statusQueue = statusQueue
+		self.directSyncSettings = directSyncSettings
 		self.session = WCSession.isSupported() ? WCSession.default : nil
 		super.init()
 	}
@@ -113,6 +115,17 @@ extension PhoneSession: WCSessionDelegate {
 		if let error {
 			logger.error("WCSession activation failed: \(error.localizedDescription)")
 		}
+
+		// WCSession persists the most recent application context across launches; a config
+		// delivered while the app wasn't running is only visible here.
+		let receivedContext = session.receivedApplicationContext
+		if !receivedContext.isEmpty {
+			let config = WatchAccountConfig.config(fromApplicationContext: receivedContext)
+			Task { @MainActor [weak self] in
+				self?.directSyncSettings.applyConfig(config)
+			}
+		}
+
 		let reachable = session.isReachable
 		Task { @MainActor [weak self] in
 			self?.updateReachability(reachable)
@@ -134,15 +147,42 @@ extension PhoneSession: WCSessionDelegate {
 		}
 	}
 
-	/// Phone → watch: incremental status deltas (reads/stars that happened on the phone)
-	/// arrive as `transferUserInfo` payloads.
-	nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
-		guard let batch = WatchMessage.statusBatch(from: userInfo) else {
-			logger.debug("Dropping unrecognized userInfo payload from the phone")
-			return
+	/// Inbound dictionary payloads — status deltas and credentials can arrive both as
+	/// interactive messages (phone reachable) and as queued `transferUserInfo` deliveries,
+	/// so both delegate entry points funnel here. Parsing happens off the main actor (the
+	/// dictionary isn't Sendable); the parsed values hop to the main actor to be applied.
+	nonisolated private func handleIncoming(dictionary: [String: Any]) {
+		if let batch = WatchMessage.statusBatch(from: dictionary) {
+			Task { @MainActor [weak self] in
+				self?.store.applyRemoteChanges(batch.changes)
+			}
+		} else if let credential = WatchCredential(dictionary: dictionary) {
+			Task { @MainActor [weak self] in
+				self?.directSyncSettings.storeCredential(credential)
+			}
+		} else if let accountID = WatchMessage.credentialTombstoneAccountID(from: dictionary) {
+			Task { @MainActor [weak self] in
+				self?.directSyncSettings.removeCredential(accountID: accountID)
+			}
+		} else {
+			logger.debug("Dropping unrecognized payload from the phone")
 		}
+	}
+
+	nonisolated func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
+		handleIncoming(dictionary: message)
+	}
+
+	nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
+		handleIncoming(dictionary: userInfo)
+	}
+
+	/// The phone-forwarded account config for the direct sync path. Latest-wins; a context
+	/// without a config means no Miniflux account exists on the phone anymore.
+	nonisolated func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) {
+		let config = WatchAccountConfig.config(fromApplicationContext: applicationContext)
 		Task { @MainActor [weak self] in
-			self?.store.applyRemoteChanges(batch.changes)
+			self?.directSyncSettings.applyConfig(config)
 		}
 	}
 

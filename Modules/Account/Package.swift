@@ -16,6 +16,7 @@ let package = Package(
 		.package(path: "../ArticlesDatabase"),
 		.package(path: "../CloudKitSync"),
 		.package(path: "../FeedFinder"),
+		.package(path: "../MinifluxAPI"),
 		.package(path: "../Secrets"),
 		.package(path: "../ErrorLog"),
 		.package(path: "../SyncDatabase"),
@@ -39,6 +40,7 @@ let package = Package(
 				"CloudKitSync",
 				"ErrorLog",
 				"FeedFinder",
+				"MinifluxAPI",
 				"Secrets",
 				"SyncDatabase",
 				"NewsBlur"
@@ -50,7 +52,7 @@ let package = Package(
 		),
 		.testTarget(
 			name: "AccountTests",
-			dependencies: ["Account"],
+			dependencies: ["Account", "MinifluxAPI"],
 			resources: [
 				.copy("JSON")
 			],

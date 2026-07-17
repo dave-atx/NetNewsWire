@@ -82,6 +82,8 @@
 		849182DD2FD32B1B005C3036 /* Tiqoe Dark.nnwtheme in Resources */ = {isa = PBXBuildFile; fileRef = 849182BB2FD32B1B005C3016 /* Tiqoe Dark.nnwtheme */; };
 		849182DD2FD32B1B005C3037 /* Verdana Revival.nnwtheme in Resources */ = {isa = PBXBuildFile; fileRef = 849182BB2FD32B1B005C3017 /* Verdana Revival.nnwtheme */; };
 		84DA7E5C2E2500010000000E /* NetNewsWire Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 84DA7E5C2E25000100000001 /* NetNewsWire Watch App.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		84DA7E5C2E25000100000012 /* Secrets in Frameworks */ = {isa = PBXBuildFile; productRef = 84DA7E5C2E25000100000010 /* Secrets */; };
+		84DA7E5C2E25000100000013 /* MinifluxAPI in Frameworks */ = {isa = PBXBuildFile; productRef = 84DA7E5C2E25000100000011 /* MinifluxAPI */; };
 		84EE3F122DB8A088009D3A8D /* RSTree in Frameworks */ = {isa = PBXBuildFile; productRef = 84EE3F112DB8A088009D3A8D /* RSTree */; };
 		84EE3F132DB8A088009D3A8D /* RSTree in Embed Frameworks */ = {isa = PBXBuildFile; productRef = 84EE3F112DB8A088009D3A8D /* RSTree */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		84EE3F152DB8A0A0009D3A8D /* RSTree in Frameworks */ = {isa = PBXBuildFile; productRef = 84EE3F142DB8A0A0009D3A8D /* RSTree */; };
@@ -545,6 +547,7 @@
 		84DA7E5C2E2500010000000F /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
+				Watch/WatchAccountConfig.swift,
 				Watch/WatchArticleRecord.swift,
 				Watch/WatchMessage.swift,
 				Watch/WatchSchema.swift,
@@ -708,6 +711,8 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				84DA7E5C2E25000100000012 /* Secrets in Frameworks */,
+				84DA7E5C2E25000100000013 /* MinifluxAPI in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1065,6 +1070,8 @@
 			);
 			name = "NetNewsWire Watch App";
 			packageProductDependencies = (
+				84DA7E5C2E25000100000010 /* Secrets */,
+				84DA7E5C2E25000100000011 /* MinifluxAPI */,
 			);
 			productName = "NetNewsWire Watch App";
 			productReference = 84DA7E5C2E25000100000001 /* NetNewsWire Watch App.app */;
@@ -1982,6 +1989,14 @@
 		848E84DE2DB749A40023F3BA /* RSCore */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = RSCore;
+		};
+		84DA7E5C2E25000100000010 /* Secrets */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = Secrets;
+		};
+		84DA7E5C2E25000100000011 /* MinifluxAPI */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MinifluxAPI;
 		};
 		84EE3F112DB8A088009D3A8D /* RSTree */ = {
 			isa = XCSwiftPackageProductDependency;

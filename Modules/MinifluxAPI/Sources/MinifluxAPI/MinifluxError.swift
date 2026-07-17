@@ -1,6 +1,6 @@
 //
 //  MinifluxError.swift
-//  Account
+//  MinifluxAPI
 //
 //  Created by Dave Marquard on 7/7/26.
 //  Copyright © 2026 Ranchero Software, LLC. All rights reserved.
@@ -17,12 +17,17 @@ struct MinifluxErrorResponse: Decodable, Sendable {
 	}
 }
 
-enum MinifluxError: LocalizedError {
+public enum MinifluxError: LocalizedError, Sendable {
 
 	case serverVersionTooOld(foundVersion: String?)
 	case serverError(message: String)
+	/// The credential-validation endpoint (`/v1/me`) returned a not-found response —
+	/// the server predates Miniflux's `/v1/me`, or the endpoint URL is wrong.
+	case endpointNotFound
+	/// `createFeed` failed because the feed already exists on the server.
+	case feedAlreadySubscribed
 
-	var errorDescription: String? {
+	public var errorDescription: String? {
 		switch self {
 		case .serverVersionTooOld(let foundVersion):
 			guard let foundVersion else {
@@ -33,6 +38,10 @@ enum MinifluxError: LocalizedError {
 		case .serverError(let message):
 			let localizedText = NSLocalizedString("The Miniflux server reported an error: %@", comment: "Server error")
 			return NSString.localizedStringWithFormat(localizedText as NSString, message) as String
+		case .endpointNotFound:
+			return NSLocalizedString("The URL request resulted in a not found error.", comment: "URL not found")
+		case .feedAlreadySubscribed:
+			return NSLocalizedString("You are already subscribed to this feed and can’t add it again.", comment: "Already subscribed")
 		}
 	}
 }

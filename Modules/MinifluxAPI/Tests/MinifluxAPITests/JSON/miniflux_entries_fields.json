@@ -1,0 +1,53 @@
+{
+	"total": 4,
+	"entries": [
+		{
+			"id": 6001,
+			"feed_id": 201,
+			"status": "unread",
+			"title": "Fields entry with an enclosure",
+			"url": "https://fields-a.example/posts/1",
+			"author": "Jane Doe",
+			"content": "<p>Body of the fields entry with an enclosure.</p>",
+			"published_at": "2026-07-07T05:12:06Z",
+			"changed_at": "2026-07-07T05:13:22Z",
+			"starred": true,
+			"enclosures": [
+				{
+					"url": "https://media.example/fields-ep1.mp3",
+					"mime_type": "audio/mpeg"
+				}
+			]
+		},
+		{
+			"id": 6002,
+			"feed_id": 202,
+			"status": "read",
+			"title": "Fields entry with empty enclosures",
+			"url": "https://fields-b.example/posts/2",
+			"author": null,
+			"content": "<p>Body of the fields entry with no author.</p>",
+			"published_at": "2026-07-06T09:00:00Z",
+			"changed_at": "2026-07-06T09:05:00Z",
+			"starred": false,
+			"enclosures": []
+		},
+		{
+			"id": 6003,
+			"feed_id": 203,
+			"status": "unread",
+			"title": null,
+			"url": null,
+			"content": null,
+			"published_at": null,
+			"changed_at": null,
+			"starred": false
+		},
+		{
+			"id": 6004,
+			"feed_id": 204,
+			"status": "unread",
+			"starred": false
+		}
+	]
+}

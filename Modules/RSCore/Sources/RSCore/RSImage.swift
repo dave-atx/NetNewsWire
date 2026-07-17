@@ -22,6 +22,10 @@ public typealias RSImage = UIImage
 public typealias RSColor = UIColor
 #endif
 
+// RSImage is only defined on macOS and iOS (see the typealiases above) — watchOS has
+// no equivalent, so this whole extension compiles out there.
+#if os(macOS) || os(iOS)
+
 private let RSImageLogger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "RSImage")
 
 public extension RSImage {
@@ -214,3 +218,5 @@ public extension RSImage {
 		return mutableData as Data
 	}
 }
+
+#endif

@@ -11,12 +11,17 @@ import ActivityLog
 import Articles
 import ErrorLog
 import FeedFinder
+import MinifluxAPI
 import RSCore
 import RSParser
 import RSWeb
 import SyncDatabase
 import os
 import Secrets
+
+/// `MinifluxAPICaller` reads and updates a narrow slice of account settings via this
+/// protocol, so `MinifluxAPI` doesn't need a reverse dependency on `Account`.
+extension AccountSettings: MinifluxAccountSettingsProviding {}
 
 @MainActor final class MinifluxAccountDelegate: AccountDelegate {
 	weak var account: Account?
@@ -331,6 +336,8 @@ import Secrets
 
 				return try await createFeed(account: account, feedID: feedID, name: name, container: container)
 			}
+		} catch MinifluxError.feedAlreadySubscribed {
+			throw AccountError.wrapped(AccountError.createErrorAlreadySubscribed, account)
 		} catch {
 			throw AccountError.wrapped(error, account)
 		}
@@ -514,7 +521,11 @@ import Secrets
 
 		let caller = MinifluxAPICaller()
 		caller.credentials = credentials
-		return try await caller.validateCredentials(endpoint: endpoint)
+		do {
+			return try await caller.validateCredentials(endpoint: endpoint)
+		} catch MinifluxError.endpointNotFound {
+			throw AccountError.urlNotFound
+		}
 	}
 
 	func vacuumDatabases() async {

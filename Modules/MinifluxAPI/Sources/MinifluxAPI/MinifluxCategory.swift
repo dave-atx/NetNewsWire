@@ -1,6 +1,6 @@
 //
 //  MinifluxCategory.swift
-//  Account
+//  MinifluxAPI
 //
 //  Created by Dave Marquard on 7/7/26.
 //  Copyright © 2026 Ranchero Software, LLC. All rights reserved.
@@ -10,20 +10,20 @@ import Foundation
 
 // GET /v1/categories → [{"id":38,"title":"All","user_id":35,"hide_globally":false},...]
 // A Miniflux category maps one-to-one to an NNW folder.
-struct MinifluxCategory: Decodable, Sendable, Hashable {
-	let categoryID: Int64
-	let title: String
+public struct MinifluxCategory: Decodable, Sendable, Hashable {
+	public let categoryID: Int64
+	public let title: String
 
 	enum CodingKeys: String, CodingKey {
 		case categoryID = "id"
 		case title
 	}
 
-	static func == (lhs: MinifluxCategory, rhs: MinifluxCategory) -> Bool {
+	public static func == (lhs: MinifluxCategory, rhs: MinifluxCategory) -> Bool {
 		lhs.categoryID == rhs.categoryID
 	}
 
-	func hash(into hasher: inout Hasher) {
+	public func hash(into hasher: inout Hasher) {
 		hasher.combine(categoryID)
 	}
 }

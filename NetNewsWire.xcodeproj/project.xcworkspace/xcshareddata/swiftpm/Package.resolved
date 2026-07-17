@@ -1,5 +1,5 @@
 {
-  "originHash" : "966bc94d3b42472d8d14cec2a6ba66433737461aea6ddde58dd1bdf10c935b25",
+  "originHash" : "858ceed07a6f112f3ba7752c13d4962537251d927c71255a36485b7f3b357b6c",
   "pins" : [
     {
       "identity" : "plcrashreporter",
@@ -17,15 +17,6 @@
       "state" : {
         "revision" : "d1a8b3c98d96c601453f2e4230f1dd65b60d0581",
         "version" : "2.0.1"
-      }
-    },
-    {
-      "identity" : "tidemark",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/brentsimmons/Tidemark",
-      "state" : {
-        "revision" : "2a5cd8a715ad1145d36009f5d3f146704d3f7ec0",
-        "version" : "1.0.1"
       }
     },
     {

@@ -9,6 +9,7 @@
 import XCTest
 import RSWeb
 import Secrets
+import MinifluxAPI
 @testable import Account
 
 @MainActor final class MinifluxStarredFallbackTests: XCTestCase {

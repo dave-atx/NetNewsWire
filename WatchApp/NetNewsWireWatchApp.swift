@@ -14,6 +14,7 @@ struct NetNewsWireWatchApp: App {
 
 	@State private var statusQueue: StatusQueue
 	@State private var store: WatchStore
+	@State private var directSyncSettings: DirectSyncSettings
 	@State private var phoneSession: PhoneSession
 	@State private var syncCoordinator: SyncCoordinator
 
@@ -22,9 +23,11 @@ struct NetNewsWireWatchApp: App {
 	init() {
 		let statusQueue = StatusQueue()
 		let store = WatchStore(statusQueue: statusQueue)
-		let phoneSession = PhoneSession(store: store, statusQueue: statusQueue)
-		let syncCoordinator = SyncCoordinator(store: store, statusQueue: statusQueue, phoneSession: phoneSession)
+		let directSyncSettings = DirectSyncSettings()
+		let phoneSession = PhoneSession(store: store, statusQueue: statusQueue, directSyncSettings: directSyncSettings)
+		let syncCoordinator = SyncCoordinator(store: store, statusQueue: statusQueue, phoneSession: phoneSession, directSyncSettings: directSyncSettings)
 
+		_directSyncSettings = State(initialValue: directSyncSettings)
 		_statusQueue = State(initialValue: statusQueue)
 		_store = State(initialValue: store)
 		_phoneSession = State(initialValue: phoneSession)

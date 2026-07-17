@@ -2,33 +2,39 @@
 import PackageDescription
 
 let package = Package(
-	name: "RSWeb",
+	name: "MinifluxAPI",
 	platforms: [.macOS(.v15), .iOS(.v17), .watchOS(.v26)],
 	products: [
 		.library(
-			name: "RSWeb",
+			name: "MinifluxAPI",
 			type: .dynamic,
-			targets: ["RSWeb"])
+			targets: ["MinifluxAPI"])
 	],
 	dependencies: [
+		.package(path: "../RSWeb"),
 		.package(path: "../RSParser"),
-		.package(path: "../RSCore")
+		.package(path: "../Secrets")
 	],
 	targets: [
 		.target(
-			name: "RSWeb",
+			name: "MinifluxAPI",
 			dependencies: [
+				"RSWeb",
 				"RSParser",
-				"RSCore"
+				"Secrets"
 			],
 			swiftSettings: [
-				.unsafeFlags(["-warnings-as-errors"]),
 				.enableUpcomingFeature("NonisolatedNonsendingByDefault"),
 				.enableUpcomingFeature("InferIsolatedConformances")
 			]
 		),
 		.testTarget(
-			name: "RSWebTests",
-			dependencies: ["RSWeb"])
+			name: "MinifluxAPITests",
+			dependencies: ["MinifluxAPI"],
+			resources: [
+				.copy("JSON")
+			],
+			swiftSettings: [.swiftLanguageMode(.v6)]
+		)
 	]
 )

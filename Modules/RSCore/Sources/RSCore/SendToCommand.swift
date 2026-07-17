@@ -14,6 +14,10 @@ import AppKit
 import UIKit
 #endif
 
+// Sending to an external application is a macOS/iOS-only notion — RSImage (used for the
+// command's icon) isn't defined on watchOS, and there's nothing to send to there anyway.
+#if os(macOS) || os(iOS)
+
 /// A type that sends an object's data to an external application.
 ///
 /// Unlike UndoableCommand commands, you instantiate one of each of these and reuse them.
@@ -45,3 +49,5 @@ import UIKit
 	///   - selectedText: The currently selected text.
 	func sendObject(_ object: Any?, selectedText: String?)
 }
+
+#endif

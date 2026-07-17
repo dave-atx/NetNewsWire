@@ -1,6 +1,6 @@
 //
 //  MinifluxEntry.swift
-//  Account
+//  MinifluxAPI
 //
 //  Created by Dave Marquard on 7/7/26.
 //  Copyright © 2026 Ranchero Software, LLC. All rights reserved.
@@ -14,22 +14,22 @@ import RSParser
 //   "created_at":"2026-07-07T05:13:22.668113Z","changed_at":"2026-07-07T05:13:22.668113Z",
 //   "content":"...","author":"...","starred":false,"reading_time":1,"enclosures":[],
 //   "feed":{...},"tags":[...]}]}
-struct MinifluxEntry: Decodable, Sendable {
-	let entryID: Int64
-	let feedID: Int64
-	let title: String?
-	let url: String?
-	let author: String?
-	let contentHTML: String?
-	let datePublished: String?
-	let enclosures: [MinifluxEnclosure]?
-	let status: String?
-	let starred: Bool?
+public struct MinifluxEntry: Decodable, Sendable {
+	public let entryID: Int64
+	public let feedID: Int64
+	public let title: String?
+	public let url: String?
+	public let author: String?
+	public let contentHTML: String?
+	public let datePublished: String?
+	public let enclosures: [MinifluxEnclosure]?
+	public let status: String?
+	public let starred: Bool?
 
 	// Miniflux emits ISO8601 dates with fractional seconds and offsets, which JSONDecoder’s
 	// .iso8601 strategy can’t parse. Rather than lose the whole entry, decode the date as a
 	// String and let DateParser take care of it — exactly like FeedbinEntry.parsedDatePublished.
-	var parsedDatePublished: Date? {
+	public var parsedDatePublished: Date? {
 		datePublished.flatMap { DateParser.date(from: $0) }
 	}
 
@@ -46,7 +46,7 @@ struct MinifluxEntry: Decodable, Sendable {
 		case starred
 	}
 
-	init(from decoder: Decoder) throws {
+	public init(from decoder: Decoder) throws {
 		let container = try decoder.container(keyedBy: CodingKeys.self)
 		entryID = try container.decode(Int64.self, forKey: .entryID)
 		feedID = try container.decode(Int64.self, forKey: .feedID)
@@ -61,9 +61,9 @@ struct MinifluxEntry: Decodable, Sendable {
 	}
 }
 
-struct MinifluxEnclosure: Decodable, Sendable {
-	let url: String?
-	let mimeType: String?
+public struct MinifluxEnclosure: Decodable, Sendable {
+	public let url: String?
+	public let mimeType: String?
 
 	enum CodingKeys: String, CodingKey {
 		case url
@@ -71,9 +71,9 @@ struct MinifluxEnclosure: Decodable, Sendable {
 	}
 }
 
-struct MinifluxEntriesResponse: Decodable, Sendable {
-	let total: Int
-	let entries: [MinifluxEntry]
+public struct MinifluxEntriesResponse: Decodable, Sendable {
+	public let total: Int
+	public let entries: [MinifluxEntry]
 }
 
 // GET /v1/entries/ids?status=unread → {"total":1960,"entry_ids":[121634,121624,...]}

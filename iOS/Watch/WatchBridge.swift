@@ -12,6 +12,7 @@ import os
 import RSCore
 import Articles
 import Account
+import Secrets
 
 /// Phone-side half of the watch relay path — see Technotes/WatchApp.md, M1.
 ///
@@ -57,6 +58,13 @@ import Account
 	private var pendingStatusChanges: [String: WatchStatusChange] = [:]
 	private var statusDebounceTask: Task<Void, Never>?
 
+	/// Last application context sent, so unchanged configs aren't re-sent (the context is
+	/// latest-wins and persisted by WatchConnectivity, so re-sends are wasteful, not wrong).
+	private var lastSentApplicationContext: [String: Any]?
+	/// The accountID in the last config sent, so its removal can be tombstoned.
+	private var lastSentConfigAccountID: String?
+	private var lastSentCredential: WatchCredential?
+
 	private override init() {
 		session = WCSession.isSupported() ? WCSession.default : nil
 		super.init()
@@ -72,6 +80,8 @@ import Account
 		session.activate()
 
 		NotificationCenter.default.addObserver(self, selector: #selector(statusesDidChange(_:)), name: .StatusesDidChange, object: nil)
+		NotificationCenter.default.addObserver(self, selector: #selector(accountsDidChange(_:)), name: .UserDidAddAccount, object: nil)
+		NotificationCenter.default.addObserver(self, selector: #selector(accountsDidChange(_:)), name: .UserDidDeleteAccount, object: nil)
 	}
 
 	/// Builds a fresh snapshot (recent unread + starred, capped and deduplicated by
@@ -84,6 +94,10 @@ import Account
 		guard let session, session.isPaired, session.isWatchAppInstalled else {
 			return
 		}
+
+		// Every snapshot occasion is also a config occasion: cheap (deduped) and it keeps
+		// the forwarded server version fresh after refreshes detect an upgrade.
+		sendAccountConfiguration()
 
 		let unreadArticles = await AccountManager.shared.fetchArticlesAsync(.unread(Self.unreadLimit))
 		let starredArticles = await AccountManager.shared.fetchArticlesAsync(.starred(Self.starredLimit))
@@ -187,6 +201,104 @@ import Account
 			return nil
 		}
 		return Int(article.articleID)
+	}
+}
+
+// MARK: - Account config + credential handoff (M2)
+
+@MainActor private extension WatchBridge {
+
+	@objc func accountsDidChange(_ note: Notification) {
+		sendAccountConfiguration()
+	}
+
+	/// Forwards the direct-sync account config to the watch — see Technotes/WatchApp.md
+	/// "Credential handoff (direct path)". The non-secret config (endpoint, detected server
+	/// version) goes via `updateApplicationContext` (latest-wins, persisted); the secret
+	/// goes separately via `sendCredential`. If a previously forwarded account no longer
+	/// exists, a tombstone tells the watch to delete its credential copy.
+	func sendAccountConfiguration() {
+		guard let session, session.activationState == .activated, session.isPaired, session.isWatchAppInstalled else {
+			return
+		}
+
+		let account = AccountManager.shared.activeAccounts.first { $0.type == .miniflux }
+		let config: WatchAccountConfig? = account.flatMap { account in
+			guard let endpointURL = account.endpointURL else {
+				return nil
+			}
+			return WatchAccountConfig(accountID: account.accountID, endpoint: endpointURL.absoluteString, serverVersion: account.detectedServerVersion)
+		}
+
+		if let previousAccountID = lastSentConfigAccountID, previousAccountID != config?.accountID {
+			sendCredentialTombstone(accountID: previousAccountID)
+			lastSentCredential = nil
+		}
+
+		let context = WatchAccountConfig.applicationContext(for: config)
+		if lastSentApplicationContext == nil || !(context as NSDictionary).isEqual(to: lastSentApplicationContext ?? [:]) {
+			do {
+				try session.updateApplicationContext(context)
+				lastSentApplicationContext = context
+			} catch {
+				Self.logger.error("Failed to update application context: \(error.localizedDescription)")
+			}
+		}
+		lastSentConfigAccountID = config?.accountID
+
+		if let account, let config {
+			sendCredential(for: account, endpoint: config.endpoint)
+		}
+	}
+
+	func sendCredential(for account: Account, endpoint: String) {
+		guard let session else {
+			return
+		}
+
+		let storedCredentials = (try? account.retrieveCredentials(type: .minifluxAPIToken)) ?? (try? account.retrieveCredentials(type: .minifluxBasic))
+		guard let storedCredentials else {
+			return
+		}
+
+		let credential = WatchCredential(accountID: account.accountID, endpoint: endpoint, credentialType: storedCredentials.type.rawValue, username: storedCredentials.username, secret: storedCredentials.secret)
+		guard credential != lastSentCredential else {
+			return
+		}
+
+		// Supersede any queued (undelivered) credential so stale secrets don't pile up in
+		// the transfer queue and arrive out of order.
+		for transfer in session.outstandingUserInfoTransfers where WatchMessage.kind(of: transfer.userInfo) == .credential {
+			transfer.cancel()
+		}
+
+		if session.isReachable {
+			session.sendMessage(credential.dictionaryRepresentation, replyHandler: nil, errorHandler: { error in
+				Self.logger.error("Credential send failed; queueing for background transfer: \(error.localizedDescription)")
+				Task { @MainActor in
+					WatchBridge.shared.transferCredentialUserInfo(credential)
+				}
+			})
+		} else {
+			_ = session.transferUserInfo(credential.dictionaryRepresentation)
+		}
+		lastSentCredential = credential
+	}
+
+	func transferCredentialUserInfo(_ credential: WatchCredential) {
+		guard let session else {
+			return
+		}
+		_ = session.transferUserInfo(credential.dictionaryRepresentation)
+	}
+
+	func sendCredentialTombstone(accountID: String) {
+		guard let session else {
+			return
+		}
+		// transferUserInfo is queued and delivered exactly once, reachable or not — the
+		// right fit for a must-arrive deletion order.
+		_ = session.transferUserInfo(WatchMessage.credentialTombstoneMessage(accountID: accountID))
 	}
 }
 
@@ -331,8 +443,11 @@ extension WatchBridge: WCSessionDelegate {
 	nonisolated func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) {
 		if let error {
 			Self.logger.error("WCSession activation failed: \(error.localizedDescription)")
-		} else {
-			Self.logger.info("WCSession activated with state \(activationState.rawValue).")
+			return
+		}
+		Self.logger.info("WCSession activated with state \(activationState.rawValue).")
+		Task { @MainActor in
+			WatchBridge.shared.sendAccountConfiguration()
 		}
 	}
 
