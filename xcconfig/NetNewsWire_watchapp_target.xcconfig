@@ -1,0 +1,27 @@
+// Settings for the NetNewsWire Watch App target — a single-target watchOS app
+// embedded in NetNewsWire-iOS.
+
+#include? "../../SharedXcodeSettings/ProjectSettings.xcconfig"
+#include "./common/NetNewsWire_codesigning_common.xcconfig"
+#include "./common/NetNewsWire_version.xcconfig"
+
+MARKETING_VERSION = 7.1.1
+
+APP_GROUP_ID = group.$(ORGANIZATION_IDENTIFIER).NetNewsWire.iOS$(APP_GROUP_SUFFIX)
+
+SDKROOT = watchos
+SUPPORTED_PLATFORMS = watchos watchsimulator
+TARGETED_DEVICE_FAMILY = 4
+WATCHOS_DEPLOYMENT_TARGET = 26.0
+
+CODE_SIGN_IDENTITY[sdk=watchos*] = iPhone Developer
+CODE_SIGN_IDENTITY[sdk=watchsimulator*] = iPhone Developer
+
+PRODUCT_NAME = $(TARGET_NAME)
+PRODUCT_BUNDLE_IDENTIFIER = $(ORGANIZATION_IDENTIFIER).NetNewsWire.iOS$(BUNDLE_ID_SUFFIX).watchkitapp
+INFOPLIST_FILE = WatchApp/Info.plist
+CODE_SIGN_ENTITLEMENTS = WatchApp/NetNewsWire_WatchApp.entitlements
+
+LD_RUNPATH_SEARCH_PATHS = $(inherited) @executable_path/Frameworks
+SKIP_INSTALL = YES
+ENABLE_PREVIEWS = YES
