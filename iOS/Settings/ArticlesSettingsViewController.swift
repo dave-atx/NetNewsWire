@@ -107,6 +107,7 @@ final class ArticlesSettingsViewController: UITableViewController {
 
 	@objc func switchOpenLinksInNetNewsWire(_ sender: UISwitch) {
 		AppDefaults.useSystemBrowser = !sender.isOn
+		UIMenuSystem.main.setNeedsRebuild()
 	}
 
 	@objc func switchEnableJavaScript(_ sender: UISwitch) {
