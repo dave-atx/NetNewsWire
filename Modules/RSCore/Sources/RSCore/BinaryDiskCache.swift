@@ -35,6 +35,13 @@ nonisolated public final class BinaryDiskCache: Sendable {
 		}
 	}
 
+	/// Deletes every file in the cache folder, but not the folder itself. Errors are ignored — a best-effort clear.
+	public func removeAllData() {
+		mutex.withLock { _ in
+			_removeAllData()
+		}
+	}
+
 	// Subscript doesn’t throw. Use when you can ignore errors.
 
 	public subscript(_ key: String) -> Data? {
@@ -78,6 +85,15 @@ nonisolated private extension BinaryDiskCache {
 	func _deleteData(forKey key: String) throws {
 		let url = urlForKey(key)
 		try FileManager.default.removeItem(at: url)
+	}
+
+	func _removeAllData() {
+		guard let fileNames = try? FileManager.default.contentsOfDirectory(atPath: folder) else {
+			return
+		}
+		for fileName in fileNames {
+			try? FileManager.default.removeItem(atPath: filePath(forKey: fileName))
+		}
 	}
 
 	func filePath(forKey key: String) -> String {

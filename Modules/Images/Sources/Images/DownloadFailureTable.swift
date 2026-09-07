@@ -57,4 +57,8 @@ struct DownloadFailureTable {
 		let sql = "DELETE FROM \(name) WHERE \(Column.lastChecked) < ?;"
 		database.executeUpdate(sql, withArgumentsIn: [cutoff])
 	}
+
+	static func deleteAll(database: FMDatabase) {
+		database.executeUpdate("DELETE FROM \(name);", withArgumentsIn: [])
+	}
 }
