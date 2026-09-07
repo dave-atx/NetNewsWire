@@ -1,0 +1,9 @@
+{
+  "id" : "b5b09b2b-2632-4d29-b624-baf4dd9a5015",
+  "targets" : [
+    {
+      "id" : "fb32a7b4-ca5e-4052-803b-e4888ff9c613",
+      "name" : "NetNewsWire-iOS"
+    }
+  ]
+}
