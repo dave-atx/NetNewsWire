@@ -19,6 +19,7 @@ struct AccountStatsView: View {
 	@State private var rows = [AccountStatsRowData]()
 	@State private var totals: AccountStatsTotals?
 	@State private var isVacuuming = false
+	@State private var isClearingIconCaches = false
 	@State private var showHelp = false
 
 	var body: some View {
@@ -50,6 +51,12 @@ struct AccountStatsView: View {
 				}
 				.frame(maxWidth: .infinity)
 				.disabled(isVacuuming)
+
+				Button(NSLocalizedString("Clear Icon Caches", comment: "Clear icon caches button")) {
+					clearIconCaches()
+				}
+				.frame(maxWidth: .infinity)
+				.disabled(isClearingIconCaches)
 			} footer: {
 				VStack(spacing: 8) {
 					Text(NSLocalizedString("Vacuuming may make databases faster.", comment: "Vacuum explanation"))
@@ -58,6 +65,13 @@ struct AccountStatsView: View {
 					ProgressView()
 						.controlSize(.small)
 						.opacity(isVacuuming ? 1 : 0)
+
+					Text(NSLocalizedString("Icons will be downloaded again as feeds appear.", comment: "Clear icon caches explanation"))
+						.frame(maxWidth: .infinity, alignment: .center)
+						.multilineTextAlignment(.center)
+					ProgressView()
+						.controlSize(.small)
+						.opacity(isClearingIconCaches ? 1 : 0)
 				}
 			}
 
@@ -168,6 +182,17 @@ private extension AccountStatsView {
 			await (UIApplication.shared.delegate as? AppDelegate)?.vacuumAllDatabases()
 			isVacuuming = false
 			await refresh()
+		}
+	}
+
+	func clearIconCaches() {
+		guard !isClearingIconCaches else {
+			return
+		}
+		isClearingIconCaches = true
+		Task {
+			await (UIApplication.shared.delegate as? AppDelegate)?.clearAllIconCaches()
+			isClearingIconCaches = false
 		}
 	}
 
