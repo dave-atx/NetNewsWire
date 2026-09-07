@@ -45,4 +45,8 @@ struct FeedIconURLTable {
 		]
 		database.insertRow(dictionary, insertType: .orReplace, tableName: name)
 	}
+
+	static func deleteAll(database: FMDatabase) {
+		database.executeUpdate("DELETE FROM \(name);", withArgumentsIn: [])
+	}
 }
