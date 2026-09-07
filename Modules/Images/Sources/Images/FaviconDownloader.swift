@@ -64,6 +64,15 @@ extension Notification.Name {
 		singleFaviconDownloaderCache.removeAll()
 	}
 
+	/// Empties the in-memory caches and deletes every cached favicon file on disk.
+	public func resetCache() {
+		cache.removeAll()
+		singleFaviconDownloaderCache.removeAll()
+		remainingFaviconURLs.removeAll()
+		currentHomePageHasOnlyFaviconICO = false
+		diskCache.removeAllData()
+	}
+
 	public func favicon(for feed: Feed) -> IconImage? {
 		assert(Thread.isMainThread)
 

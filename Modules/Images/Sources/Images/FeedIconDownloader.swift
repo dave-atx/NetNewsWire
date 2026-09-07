@@ -44,6 +44,14 @@ extension Notification.Name {
 		cache.removeAll()
 	}
 
+	/// Empties every in-memory cache. Cached image bytes on disk live in `ImageDownloader`.
+	public func resetCache() {
+		cache.removeAll()
+		homePagesWithNoIconURL.removeAll()
+		waitingForFeedURLs.removeAll()
+		feedsWaitingForHTMLMetadata.removeAll()
+	}
+
 	public func icon(for feed: Feed) -> IconImage? {
 
 		if let cachedImage = cache[feed] {

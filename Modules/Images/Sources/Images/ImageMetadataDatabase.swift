@@ -59,6 +59,26 @@ import RSDatabaseObjC
 		await queue.vacuum()
 	}
 
+	// MARK: - Reset
+
+	/// Empties the in-memory caches and deletes every row from every table. In particular, this
+	/// clears the download-failure table, which otherwise suppresses retries for `failureRetryDays` days.
+	public func resetCache() async {
+		homePageToFaviconURL.removeAll()
+		homePagesWithNoFavicon.removeAll()
+		feedURLToIconURL.removeAll()
+		failureDates.removeAll()
+
+		await withCheckedContinuation { continuation in
+			queue.runInDatabase { database in
+				HomePageFaviconTable.deleteAll(database: database)
+				FeedIconURLTable.deleteAll(database: database)
+				DownloadFailureTable.deleteAll(database: database)
+				continuation.resume()
+			}
+		}
+	}
+
 	// MARK: - HomePageFavicon
 
 	public func faviconURL(forHomePageURL homePageURL: String) -> String? {

@@ -64,6 +64,12 @@ extension ImageDownloadError: LocalizedError {
 		imageCache.removeAll()
 	}
 
+	/// Empties the in-memory image cache and deletes every cached image file on disk.
+	public func resetCache() {
+		imageCache.removeAll()
+		diskCache.removeAllData()
+	}
+
 	/// Returns the data if in memory, else dispatches a disk-then-network fetch and returns nil.
 	/// Activity log fires only when the fetch reaches the network.
 	@discardableResult
