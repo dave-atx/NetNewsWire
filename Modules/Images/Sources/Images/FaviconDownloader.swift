@@ -30,7 +30,8 @@ extension Notification.Name {
 	private let diskCache: BinaryDiskCache
 	private var singleFaviconDownloaderCache = [String: SingleFaviconDownloader]() // faviconURL: SingleFaviconDownloader
 	private var remainingFaviconURLs = [String: ArraySlice<String>]() // homePageURL: array of faviconURLs that haven't been checked yet
-	private var currentHomePageHasOnlyFaviconICO = false
+	private var homePagesWithOnlyDefaultFaviconURL = Set<String>() // home pages that declared no favicon of their own
+	private var homePagesWithInconclusiveResult = Set<String>() // home pages whose candidates can't support a lasting verdict
 
 	private let queue: DispatchQueue
 	private var cache = [Feed: IconImage]() // faviconURL: RSImage
@@ -48,6 +49,7 @@ extension Notification.Name {
 
 		NotificationCenter.default.addObserver(self, selector: #selector(didLoadFavicon(_:)), name: .DidLoadFavicon, object: nil)
 		NotificationCenter.default.addObserver(self, selector: #selector(htmlMetadataIsAvailable(_:)), name: .htmlMetadataAvailable, object: nil)
+		NotificationCenter.default.addObserver(self, selector: #selector(htmlMetadataIsUnavailable(_:)), name: .htmlMetadataUnavailable, object: nil)
 		NotificationCenter.default.addObserver(self, selector: #selector(handleLowMemory(_:)), name: .lowMemory, object: nil)
 		NotificationCenter.default.addObserver(self, selector: #selector(handleAppDidGoToBackground(_:)), name: .appDidGoToBackground, object: nil)
 	}
@@ -69,7 +71,8 @@ extension Notification.Name {
 		cache.removeAll()
 		singleFaviconDownloaderCache.removeAll()
 		remainingFaviconURLs.removeAll()
-		currentHomePageHasOnlyFaviconICO = false
+		homePagesWithOnlyDefaultFaviconURL.removeAll()
+		homePagesWithInconclusiveResult.removeAll()
 		diskCache.removeAllData()
 	}
 
@@ -152,16 +155,25 @@ extension Notification.Name {
 		let url = homePageURL.normalizedURL
 
 		if ImageMetadataDatabase.shared.homePageHasNoFavicon(url) {
+			Self.logger.debug("Recorded as having no favicon, skipping: \(url, privacy: .public)")
 			return nil
 		}
 
 		if let faviconURL = ImageMetadataDatabase.shared.faviconURL(forHomePageURL: url) {
+			Self.logger.debug("Known favicon for \(url, privacy: .public): \(faviconURL, privacy: .public)")
 			return favicon(with: faviconURL, homePageURL: url)
 		}
 
 		if let faviconURLs = findFaviconURLs(with: url) {
-			// If the site explicitly specifies favicon.ico, it will appear twice.
-			self.currentHomePageHasOnlyFaviconICO = faviconURLs.count == 1
+			// A single candidate is the synthesized favicon.ico — the site declared none of its
+			// own. That verdict is read back later, asynchronously, once the candidates run out,
+			// so it has to be remembered per home page rather than in one shared flag.
+			if faviconURLs.count == 1 {
+				homePagesWithOnlyDefaultFaviconURL.insert(url)
+			} else {
+				homePagesWithOnlyDefaultFaviconURL.remove(url)
+			}
+			Self.logger.debug("Candidates for \(url, privacy: .public): \(faviconURLs.joined(separator: ", "), privacy: .public)")
 			self.remainingFaviconURLs[url] = faviconURLs[...]
 			downloadNextFavicon(forHomePageURL: url)
 		}
@@ -188,6 +200,14 @@ extension Notification.Name {
 			return
 		}
 		guard singleFaviconDownloader.iconImage != nil else {
+			// No image and no error means the download failed transiently. A network blip
+			// must not end up recorded as “this site has no favicon”.
+			if singleFaviconDownloader.error == nil {
+				Self.logger.debug("Transient favicon failure for \(singleFaviconDownloader.faviconURL, privacy: .public)")
+				homePagesWithInconclusiveResult.insert(homePageURL)
+			} else {
+				Self.logger.debug("Favicon failed for \(singleFaviconDownloader.faviconURL, privacy: .public)")
+			}
 			if remainingFaviconURLs[homePageURL] != nil {
 				downloadNextFavicon(forHomePageURL: homePageURL)
 			}
@@ -195,7 +215,10 @@ extension Notification.Name {
 		}
 
 		remainingFaviconURLs[homePageURL] = nil
+		homePagesWithOnlyDefaultFaviconURL.remove(homePageURL)
+		homePagesWithInconclusiveResult.remove(homePageURL)
 
+		Self.logger.debug("Loaded favicon for \(homePageURL, privacy: .public): \(singleFaviconDownloader.faviconURL, privacy: .public)")
 		postFaviconDidBecomeAvailableNotification(singleFaviconDownloader.faviconURL)
 	}
 
@@ -206,6 +229,19 @@ extension Notification.Name {
 			return
 		}
 
+		Task { @MainActor in
+			_ = favicon(withHomePageURL: url)
+		}
+	}
+
+	@objc func htmlMetadataIsUnavailable(_ note: Notification) {
+
+		guard let url = note.userInfo?[HTMLMetadataUserInfoKey.url] as? String else {
+			assertionFailure("Expected URL string in .htmlMetadataUnavailable Notification userInfo.")
+			return
+		}
+
+		// The home page isn’t coming. Retry so the default favicon.ico still gets its chance.
 		Task { @MainActor in
 			_ = favicon(withHomePageURL: url)
 		}
@@ -227,17 +263,34 @@ private extension FaviconDownloader {
 		guard let url = URL(string: homePageURL) else {
 			return nil
 		}
+
 		guard let htmlMetadata = HTMLMetadataDownloader.shared.cachedMetadata(for: homePageURL) else {
-			return nil
+			// Metadata that is merely still downloading brings us back here via
+			// htmlMetadataIsAvailable. Metadata that isn’t coming at all used to cost the feed
+			// its icon entirely — even though a site’s default favicon.ico needs no HTML to find.
+			guard HTMLMetadataDownloader.shared.metadataIsUnavailable(for: homePageURL), let defaultFaviconURL = Self.defaultFaviconURL(for: url) else {
+				return nil
+			}
+			// We never read the home page, so an exhausted queue proves nothing about it.
+			homePagesWithInconclusiveResult.insert(homePageURL)
+			Self.logger.debug("No metadata for \(homePageURL, privacy: .public), trying the default favicon")
+			return [defaultFaviconURL]
 		}
+
 		let faviconURLs = htmlMetadata.usableFaviconURLs() ?? [String]()
 
-		guard let scheme = url.scheme, let host = url.host else {
+		guard let defaultFaviconURL = Self.defaultFaviconURL(for: url) else {
 			return faviconURLs.isEmpty ? nil : faviconURLs
 		}
-
-		let defaultFaviconURL = "\(scheme)://\(host)/favicon.ico".lowercased(with: FaviconDownloader.localeForLowercasing)
 		return faviconURLs + [defaultFaviconURL]
+	}
+
+	/// Every site is entitled to a favicon.ico at its root, whether or not it says so.
+	static func defaultFaviconURL(for url: URL) -> String? {
+		guard let scheme = url.scheme, let host = url.host else {
+			return nil
+		}
+		return "\(scheme)://\(host)/favicon.ico".lowercased(with: localeForLowercasing)
 	}
 
 	func canAttemptDownload(_ faviconURL: String) -> Bool {
@@ -259,15 +312,27 @@ private extension FaviconDownloader {
 		while let faviconURL = remainingFaviconURLs[homePageURL]?.first {
 			remainingFaviconURLs[homePageURL] = remainingFaviconURLs[homePageURL]?.dropFirst()
 			if canAttemptDownload(faviconURL) {
+				Self.logger.debug("Trying favicon for \(homePageURL, privacy: .public): \(faviconURL, privacy: .public)")
 				_ = faviconDownloader(withURL: faviconURL, homePageURL: homePageURL)
 				return
 			}
 		}
 
 		remainingFaviconURLs[homePageURL] = nil
-		if currentHomePageHasOnlyFaviconICO {
-			ImageMetadataDatabase.shared.saveHomePageFavicon(homePageURL: homePageURL, faviconURL: nil)
+
+		let declaredNoFaviconOfItsOwn = homePagesWithOnlyDefaultFaviconURL.remove(homePageURL) != nil
+		let resultWasInconclusive = homePagesWithInconclusiveResult.remove(homePageURL) != nil
+
+		// A lasting “no favicon” verdict is only earned by a home page we actually read and
+		// whose own favicon.ico we actually reached and rejected. A blip, or a home page we
+		// never managed to fetch, must not suppress retries for days.
+		guard declaredNoFaviconOfItsOwn, !resultWasInconclusive else {
+			Self.logger.debug("Out of favicon candidates for \(homePageURL, privacy: .public), recording no verdict")
+			return
 		}
+
+		Self.logger.debug("Recording no favicon for \(homePageURL, privacy: .public)")
+		ImageMetadataDatabase.shared.saveHomePageFavicon(homePageURL: homePageURL, faviconURL: nil)
 	}
 
 	func faviconDownloader(withURL faviconURL: String, homePageURL: String?) -> SingleFaviconDownloader {

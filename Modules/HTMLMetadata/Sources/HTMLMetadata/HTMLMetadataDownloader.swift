@@ -26,6 +26,10 @@ nonisolated public final class HTMLMetadataDownloader: Sendable {
 	/// In-memory mirror so `cachedMetadata(for:)` can answer synchronously.
 	private let cache = OSAllocatedUnfairLock(initialState: [String: HTMLMetadataRecord]())
 
+	/// URLs whose last fetch failed and which won’t be retried yet. Callers that don’t
+	/// actually need the HTML can act on this instead of waiting forever.
+	private let unavailableURLs = OSAllocatedUnfairLock(initialState: Set<String>())
+
 	init() {
 		NotificationCenter.default.addObserver(self, selector: #selector(handleAppDidGoToBackground(_:)), name: .appDidGoToBackground, object: nil)
 		NotificationCenter.default.addObserver(self, selector: #selector(handleLowMemory(_:)), name: .lowMemory, object: nil)
@@ -54,6 +58,13 @@ nonisolated public final class HTMLMetadataDownloader: Sendable {
 		return nil
 	}
 
+	/// True when the last attempt to fetch this URL’s metadata failed and no new download
+	/// is pending. A caller that only needs a guess — a site’s default `/favicon.ico`, say —
+	/// can proceed rather than wait for metadata that isn’t coming.
+	public func metadataIsUnavailable(for url: String) -> Bool {
+		unavailableURLs.withLock { $0.contains(url) }
+	}
+
 }
 
 // MARK: - Private
@@ -75,6 +86,7 @@ nonisolated private extension HTMLMetadataDownloader {
 			}
 
 			if await HTMLMetadataDatabase.shared.recentlyFailed(for: url) {
+				markUnavailable(url)
 				return
 			}
 
@@ -84,6 +96,7 @@ nonisolated private extension HTMLMetadataDownloader {
 
 	func cacheRecord(_ record: HTMLMetadataRecord) {
 		cache.withLock { $0[record.url] = record }
+		markAvailable(record.url)
 	}
 
 	func downloadMetadataIfNeeded(_ url: String) {
@@ -140,7 +153,9 @@ nonisolated private extension HTMLMetadataDownloader {
 				}
 
 				// Download failed — try returning stale cached data.
-				await returnStaleCacheIfAvailable(url)
+				if await !returnStaleCacheIfAvailable(url) {
+					markUnavailable(url)
+				}
 
 				let userInfo = [NSLocalizedDescriptionKey: "HTTP \(statusCode)"]
 				let statusError = NSError(domain: "NetNewsWire", code: statusCode, userInfo: userInfo)
@@ -149,7 +164,9 @@ nonisolated private extension HTMLMetadataDownloader {
 			} catch {
 				// Pre-response failure (DNS, TLS, network).
 				await HTMLMetadataDatabase.shared.noteTransientFailure(url: url)
-				await returnStaleCacheIfAvailable(url)
+				if await !returnStaleCacheIfAvailable(url) {
+					markUnavailable(url)
+				}
 
 				activityLog.didFail(.htmlMetadataDownloader, kind: kind, error: error)
 			}
@@ -166,10 +183,34 @@ nonisolated private extension HTMLMetadataDownloader {
 		)
 	}
 
-	@MainActor func returnStaleCacheIfAvailable(_ url: String) async {
-		if let record = await HTMLMetadataDatabase.shared.staleCachedRecord(for: url) {
-			cacheRecord(record)
-			postNotification(record)
+	func markUnavailable(_ url: String) {
+		let wasAlreadyUnavailable = unavailableURLs.withLock { unavailableURLs -> Bool in
+			let (inserted, _) = unavailableURLs.insert(url)
+			return !inserted
 		}
+		if !wasAlreadyUnavailable {
+			postUnavailableNotification(url)
+		}
+	}
+
+	func markAvailable(_ url: String) {
+		unavailableURLs.withLock { _ = $0.remove(url) }
+	}
+
+	func postUnavailableNotification(_ url: String) {
+		let userInfo: [String: Any] = [HTMLMetadataUserInfoKey.url: url]
+		NotificationCenter.default.postOnMainThread(
+			name: .htmlMetadataUnavailable, object: self, userInfo: userInfo
+		)
+	}
+
+	/// Returns true when stale metadata was found and handed back to callers.
+	@MainActor func returnStaleCacheIfAvailable(_ url: String) async -> Bool {
+		guard let record = await HTMLMetadataDatabase.shared.staleCachedRecord(for: url) else {
+			return false
+		}
+		cacheRecord(record)
+		postNotification(record)
+		return true
 	}
 }
