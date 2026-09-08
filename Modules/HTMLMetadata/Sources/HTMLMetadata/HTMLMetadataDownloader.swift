@@ -62,6 +62,15 @@ nonisolated public final class HTMLMetadataDownloader: Sendable {
 	public func metadataIsUnavailable(for url: String) -> Bool {
 		unavailableURLs.withLock { $0.contains(url) }
 	}
+
+	/// Empties every cache, in memory and on disk, including the failure records that suppress
+	/// re-downloads. Metadata is fetched again on the next request.
+	@MainActor public func resetCache() async {
+		cache.withLock { $0.removeAll() }
+		attemptDates.withLock { $0.removeAll() }
+		unavailableURLs.withLock { $0.removeAll() }
+		await HTMLMetadataDatabase.shared.resetCache()
+	}
 }
 
 // MARK: - Private
