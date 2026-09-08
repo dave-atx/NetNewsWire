@@ -67,6 +67,7 @@ extension ImageDownloadError: LocalizedError {
 	/// Empties the in-memory image cache and deletes every cached image file on disk.
 	public func resetCache() {
 		imageCache.removeAll()
+		urlsInProgress.removeAll()
 		diskCache.removeAllData()
 	}
 
