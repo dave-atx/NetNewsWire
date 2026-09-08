@@ -42,6 +42,11 @@ public typealias DownloadCallback = @MainActor (DownloadResponse, Error?) -> Swi
 		urlSession.invalidateAndCancel()
 	}
 
+	/// Empties the short-lived response cache so the next request goes to the network.
+	public func resetCache() {
+		cache.removeAll()
+	}
+
 	public func download(_ url: URL, userAgentStyle: UserAgentStyle = .feed) async throws -> DownloadResponse {
 		try await download(URLRequest(url: url), userAgentStyle: userAgentStyle)
 	}
