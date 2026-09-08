@@ -161,6 +161,13 @@ public final actor HTMLMetadataDatabase {
 		cache.removeAll()
 	}
 
+	/// Empties the in-memory cache and deletes every row, including the failure rows that
+	/// otherwise suppress re-downloads for days.
+	func resetCache() {
+		cache.removeAll()
+		HTMLMetadataTable.deleteAll(database: database)
+	}
+
 	func removeExpiredEntries() {
 		let cutoff = Date().timeIntervalSince1970 - TimeInterval(days: Self.maximumDaysWithoutCheck)
 		HTMLMetadataTable.removeExpired(olderThan: cutoff, database: database)
