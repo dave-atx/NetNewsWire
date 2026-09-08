@@ -152,14 +152,17 @@ extension Notification.Name {
 		let url = homePageURL.normalizedURL
 
 		if ImageMetadataDatabase.shared.homePageHasNoFavicon(url) {
+			Self.logger.debug("Recorded as having no favicon: \(url, privacy: .public)")
 			return nil
 		}
 
 		if let faviconURL = ImageMetadataDatabase.shared.faviconURL(forHomePageURL: url) {
+			Self.logger.debug("Known favicon for \(url, privacy: .public): \(faviconURL, privacy: .public)")
 			return favicon(with: faviconURL, homePageURL: url)
 		}
 
 		if let faviconURLs = findFaviconURLs(with: url) {
+			Self.logger.debug("Candidates for \(url, privacy: .public): \(faviconURLs.joined(separator: ", "), privacy: .public)")
 			self.remainingFaviconURLs[url] = faviconURLs[...]
 			downloadNextFavicon(forHomePageURL: url)
 		}
@@ -188,6 +191,7 @@ extension Notification.Name {
 		guard singleFaviconDownloader.iconImage != nil else {
 			if singleFaviconDownloader.error == nil {
 				// Transient — not an answer about the site.
+				Self.logger.debug("Transient favicon failure: \(singleFaviconDownloader.faviconURL, privacy: .public)")
 				homePagesWithOnlyDefaultFaviconURL.remove(homePageURL)
 			}
 			if remainingFaviconURLs[homePageURL] != nil {
@@ -199,6 +203,7 @@ extension Notification.Name {
 		remainingFaviconURLs[homePageURL] = nil
 		homePagesWithOnlyDefaultFaviconURL.remove(homePageURL)
 
+		Self.logger.debug("Loaded favicon for \(homePageURL, privacy: .public): \(singleFaviconDownloader.faviconURL, privacy: .public)")
 		postFaviconDidBecomeAvailableNotification(singleFaviconDownloader.faviconURL)
 	}
 
@@ -235,6 +240,9 @@ private extension FaviconDownloader {
 		guard let candidates else {
 			return nil
 		}
+		if metadata == nil {
+			Self.logger.debug("No metadata for \(homePageURL, privacy: .public), trying the default favicon")
+		}
 		if candidates.onlyDefaultFaviconURL {
 			homePagesWithOnlyDefaultFaviconURL.insert(homePageURL)
 		}
@@ -243,11 +251,11 @@ private extension FaviconDownloader {
 
 	func canAttemptDownload(_ faviconURL: String) -> Bool {
 		if !faviconURL.hasPrefix("http://") && !faviconURL.hasPrefix("https://") {
-			Self.logger.debug("Skipping non-http(s) URL: \(faviconURL)")
+			Self.logger.debug("Skipping non-http(s) URL: \(faviconURL, privacy: .public)")
 			return false
 		}
 		if ImageMetadataDatabase.shared.recentlyFailed(url: faviconURL) {
-			Self.logger.debug("Skipping recently-failed URL: \(faviconURL)")
+			Self.logger.debug("Skipping recently-failed URL: \(faviconURL, privacy: .public)")
 			return false
 		}
 		return true
@@ -260,6 +268,7 @@ private extension FaviconDownloader {
 		while let faviconURL = remainingFaviconURLs[homePageURL]?.first {
 			remainingFaviconURLs[homePageURL] = remainingFaviconURLs[homePageURL]?.dropFirst()
 			if canAttemptDownload(faviconURL) {
+				Self.logger.debug("Trying favicon for \(homePageURL, privacy: .public): \(faviconURL, privacy: .public)")
 				_ = faviconDownloader(withURL: faviconURL, homePageURL: homePageURL)
 				return
 			}
