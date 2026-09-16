@@ -455,7 +455,7 @@ OPT_TESTS="Run tests first"
 OPT_CLEAN="Clean build"
 OPT_UNIVERSAL="Universal binary (arm64 + x86_64)"
 
-CHOICES=$(gum choose --no-limit --header "Space to toggle, Enter to go:" \
+CHOICES=$(gum choose --no-limit --header "x or Tab to toggle, Enter to go:" \
 	--selected "$OPT_TESTS" \
 	"$OPT_TESTS" "$OPT_CLEAN" "$OPT_UNIVERSAL") || exit 0
 
