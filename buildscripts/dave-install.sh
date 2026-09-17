@@ -3,12 +3,13 @@ set -uo pipefail
 
 # Dave's personal script: lives on daily-driver only, never merge upstream.
 #
-# Interactively builds a Release NetNewsWire for macOS and installs it into
-# /Applications, backing up the currently installed copy first.
+# Interactively builds NetNewsWire for macOS (Debug, like Xcode's Run, or
+# Release) and installs it into /Applications, backing up the currently
+# installed copy first.
 #
 # Usage:
-#   buildscripts/dave-install-release.sh             build + install
-#   buildscripts/dave-install-release.sh --rollback  restore a backed-up build
+#   buildscripts/dave-install.sh             build + install
+#   buildscripts/dave-install.sh --rollback  restore a backed-up build
 #
 # Depends on gum <https://github.com/charmbracelet/gum> and xcbeautify.
 
@@ -18,11 +19,11 @@ SCHEME="NetNewsWire"
 APP_NAME="NetNewsWire.app"
 INSTALL_DIR="/Applications"
 INSTALLED_APP="$INSTALL_DIR/$APP_NAME"
-DERIVED_DATA="$HOME/Library/Developer/Xcode/DerivedData/NetNewsWire-dave-release"
-BUILT_APP="$DERIVED_DATA/Build/Products/Release/$APP_NAME"
+# Release builds use their own DerivedData; Debug builds share Xcode's so they stay incremental.
+RELEASE_DERIVED_DATA="$HOME/Library/Developer/Xcode/DerivedData/NetNewsWire-dave-release"
 BACKUP_DIR="$HOME/Library/Application Support/NetNewsWire Install Backups"
 BACKUPS_TO_KEEP=5
-LOG_DIR="$DERIVED_DATA/Logs/dave-install"
+LOG_DIR="$HOME/Library/Logs/NetNewsWire dave-install"
 TESTFLIGHT_TAG_PREFIX="dave-testflight-"
 
 # Colors (ANSI 256)
@@ -104,7 +105,9 @@ app_version() {
 		echo "not installed"
 		return
 	fi
-	echo "$(plist_value "$app" CFBundleShortVersionString) ($(plist_value "$app" CFBundleVersion))"
+	local config="Release"
+	[[ "$(plist_value "$app" CFBundleIdentifier)" == *-DEBUG ]] && config="Debug"
+	echo "$(plist_value "$app" CFBundleShortVersionString) ($(plist_value "$app" CFBundleVersion)) $config"
 }
 
 section() {
@@ -394,7 +397,7 @@ verify_signature() {
 
 case "${1:-}" in
 -h | --help)
-	sed -n '3,12p' "$0" | sed 's/^# \{0,1\}//'
+	sed -n '3,13p' "$0" | sed 's/^# \{0,1\}//'
 	exit 0
 	;;
 --rollback | "")
@@ -412,11 +415,11 @@ for tool in gum xcbeautify; do
 	}
 done
 
-window_title "release build"
+window_title "build"
 gum style \
 	--border double --border-foreground "$PINK" --foreground "$PINK" --bold \
 	--align center --width 50 --padding "1 2" --margin "1 0" \
-	"🗞  NetNewsWire" "Release build → /Applications"
+	"🗞  NetNewsWire" "Build → /Applications"
 
 [[ "${1:-}" == "--rollback" ]] && rollback
 
@@ -451,6 +454,20 @@ fi
 
 # Options
 section "Options"
+CONFIGURATION=$(gum choose --header "Configuration:" --selected Debug \
+	"Debug" "Release") || exit 0
+[[ -n "$CONFIGURATION" ]] || exit 0
+
+if [[ "$CONFIGURATION" == "Debug" ]]; then
+	{
+		echo "Debug build caveats:"
+		echo "• Share and Safari extensions are disabled (SKIP_APP_GROUP_ACCESS)"
+		echo "• -DEBUG bundle ID: uses Xcode's Debug data, not the Release app's"
+		echo "• Shares a database with Xcode's Run; don't run both at once"
+		echo "• Unoptimized, and no refresh on launch"
+	} | gum style --foreground "$YELLOW" --border rounded --border-foreground "$YELLOW" --padding "0 1"
+fi
+
 OPT_TESTS="Run tests first"
 OPT_CLEAN="Clean build"
 OPT_UNIVERSAL="Universal binary (arm64 + x86_64)"
@@ -467,7 +484,21 @@ has_choice "$OPT_TESTS" && RUN_TESTS=1 || RUN_TESTS=0
 has_choice "$OPT_CLEAN" && CLEAN=1 || CLEAN=0
 has_choice "$OPT_UNIVERSAL" && UNIVERSAL=1 || UNIVERSAL=0
 
-info "Tests: $([[ $RUN_TESTS == 1 ]] && echo yes || echo no) · Clean: $([[ $CLEAN == 1 ]] && echo yes || echo no) · Arch: $([[ $UNIVERSAL == 1 ]] && echo universal || echo arm64)"
+info "Config: $CONFIGURATION · Tests: $([[ $RUN_TESTS == 1 ]] && echo yes || echo no) · Clean: $([[ $CLEAN == 1 ]] && echo yes || echo no) · Arch: $([[ $UNIVERSAL == 1 ]] && echo universal || echo arm64)"
+
+# Debug matches Xcode's Run on "My Mac": default DerivedData, no build setting overrides
+# (overrides would make Xcode and this script invalidate each other's builds).
+if [[ "$CONFIGURATION" == "Debug" ]]; then
+	DERIVED_DATA_ARGS=()
+	DESTINATION="platform=macOS,arch=arm64"
+	ARCH_SETTINGS=()
+	((UNIVERSAL)) && ARCH_SETTINGS=("ARCHS=arm64 x86_64" "ONLY_ACTIVE_ARCH=NO")
+else
+	DERIVED_DATA_ARGS=(-derivedDataPath "$RELEASE_DERIVED_DATA")
+	DESTINATION="generic/platform=macOS"
+	ARCH_SETTINGS=("ARCHS=arm64" "ONLY_ACTIVE_ARCH=NO")
+	((UNIVERSAL)) && ARCH_SETTINGS=("ARCHS=arm64 x86_64" "ONLY_ACTIVE_ARCH=NO")
+fi
 
 # Test
 section "Build"
@@ -477,7 +508,7 @@ if ((RUN_TESTS)); then
 		-project "$PROJECT_PATH" \
 		-scheme "$SCHEME" \
 		-destination "platform=macOS,arch=arm64" \
-		-derivedDataPath "$DERIVED_DATA" \
+		${DERIVED_DATA_ARGS[@]+"${DERIVED_DATA_ARGS[@]}"} \
 		test
 fi
 
@@ -485,23 +516,22 @@ fi
 BUILD_ACTIONS=(build)
 ((CLEAN)) && BUILD_ACTIONS=(clean build)
 
-if ((UNIVERSAL)); then
-	ARCH_SETTINGS=("ARCHS=arm64 x86_64" "ONLY_ACTIVE_ARCH=NO")
-else
-	ARCH_SETTINGS=("ARCHS=arm64" "ONLY_ACTIVE_ARCH=NO")
-fi
+BUILD_ARGS=(
+	-project "$PROJECT_PATH"
+	-scheme "$SCHEME"
+	-configuration "$CONFIGURATION"
+	-destination "$DESTINATION"
+	${DERIVED_DATA_ARGS[@]+"${DERIVED_DATA_ARGS[@]}"}
+	${ARCH_SETTINGS[@]+"${ARCH_SETTINGS[@]}"}
+)
 
-run_with_live_log "Release build" build \
-	xcodebuild \
-	-project "$PROJECT_PATH" \
-	-scheme "$SCHEME" \
-	-configuration Release \
-	-destination "generic/platform=macOS" \
-	-derivedDataPath "$DERIVED_DATA" \
-	"${ARCH_SETTINGS[@]}" \
-	"${BUILD_ACTIONS[@]}"
+run_with_live_log "$CONFIGURATION build" build \
+	xcodebuild "${BUILD_ARGS[@]}" "${BUILD_ACTIONS[@]}"
 
-[[ -d "$BUILT_APP" ]] || die "Build succeeded but $BUILT_APP is missing"
+BUILT_PRODUCTS_DIR=$(xcodebuild "${BUILD_ARGS[@]}" -showBuildSettings 2>/dev/null |
+	awk -F ' = ' '/^ *BUILT_PRODUCTS_DIR = / { print $2; exit }')
+BUILT_APP="$BUILT_PRODUCTS_DIR/$APP_NAME"
+[[ -n "$BUILT_PRODUCTS_DIR" && -d "$BUILT_APP" ]] || die "Build succeeded but couldn't find $APP_NAME (looked in '$BUILT_PRODUCTS_DIR')"
 
 verify_signature
 
