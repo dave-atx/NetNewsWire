@@ -7,6 +7,7 @@
 //
 
 import Foundation
+import AppIntents
 import CoreSpotlight
 import CoreServices
 import RSCore
@@ -209,6 +210,11 @@ import Images
 
 		activity.persistentIdentifier = sidebarItem.sidebarItemID?.description ?? ""
 
+		// Lets Siri and Apple Intelligence resolve “this” to the feed being shown.
+		if let feed = sidebarItem as? Feed, #available(iOS 18.2, macOS 15.2, *) {
+			activity.appEntityIdentifier = EntityIdentifier(for: FeedEntity.self, identifier: AccountScopedEntityID(feed: feed))
+		}
+
 		#if os(iOS)
 		activity.suggestedInvocationPhrase = title
 		activity.isEligibleForPrediction = true
@@ -234,6 +240,11 @@ import Images
 		activity.isEligibleForHandoff = true
 
 		activity.persistentIdentifier = ActivityManager.identifier(for: article)
+
+		// Lets Siri and Apple Intelligence resolve “this” to the article being read.
+		if #available(iOS 18.2, macOS 15.2, *) {
+			activity.appEntityIdentifier = EntityIdentifier(for: ArticleEntity.self, identifier: AccountScopedEntityID(article: article))
+		}
 
 		#if os(iOS)
 		activity.keywords = Set(makeKeywords(article))
