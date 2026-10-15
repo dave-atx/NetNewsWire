@@ -12,7 +12,7 @@ struct NetNewsWireAppShortcuts: AppShortcutsProvider {
 
 	static var appShortcuts: [AppShortcut] {
 		AppShortcut(
-			intent: AddFeedAppIntent(),
+			intent: SubscribeToFeedIntent(),
 			phrases: [
 				"Add a feed to \(.applicationName)",
 				"Add feed in \(.applicationName)"

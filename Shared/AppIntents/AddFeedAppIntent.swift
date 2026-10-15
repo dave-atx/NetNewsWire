@@ -5,6 +5,9 @@
 //  Modern App Intents replacement for the legacy SiriKit "Add Feed" intent.
 //  <https://github.com/Ranchero-Software/NetNewsWire/issues/5248>
 //
+//  Superseded by SubscribeToFeedIntent. Hidden from the action list, but kept so that
+//  shortcuts saved with it keep working; don't rename it or change its parameters.
+//
 
 import Foundation
 import AppIntents
@@ -13,6 +16,7 @@ struct AddFeedAppIntent: AppIntent {
 
 	static let title: LocalizedStringResource = "Add Feed"
 	static let description = IntentDescription("Adds a feed to NetNewsWire.")
+	static let isDiscoverable = false
 
 	// Runs in the background: like the Share Extension, this only enqueues a request into the
 	// app group; the main app turns it into an actual feed the next time it processes the queue.
