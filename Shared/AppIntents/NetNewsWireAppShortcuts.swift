@@ -1,6 +1,6 @@
 //
 //  NetNewsWireAppShortcuts.swift
-//  NetNewsWire-iOS
+//  NetNewsWire
 //
 //  Makes App Intents available in the Shortcuts app / Spotlight / Siri with no user setup.
 //  <https://github.com/Ranchero-Software/NetNewsWire/issues/5248>
