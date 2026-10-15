@@ -8,6 +8,10 @@ ORGANIZATION_IDENTIFIER = com.ranchero
 DEVELOPMENT_TEAM = M8L2WTLA8W
 PROVISIONING_PROFILE_SPECIFIER =
 DEVELOPER_ENTITLEMENTS =
+// The Mac app group's prefix. macOS grants a group.-prefixed app group without asking only when
+// the provisioning profile authorizes it; builds signed with a wildcard profile can set this to
+// their team ID plus a period (e.g. 5WM6947328.), which macOS always grants to that team's apps.
+APP_GROUP_PREFIX = group.
 
 // developers can locally override the Xcode settings for code signing
 // by creating a DeveloperSettings.xcconfig file locally at the appropriate path
