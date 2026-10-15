@@ -1,6 +1,6 @@
 //
 //  AddFeedAppIntent.swift
-//  NetNewsWire-iOS
+//  NetNewsWire
 //
 //  Modern App Intents replacement for the legacy SiriKit "Add Feed" intent.
 //  <https://github.com/Ranchero-Software/NetNewsWire/issues/5248>
@@ -16,7 +16,10 @@ struct AddFeedAppIntent: AppIntent {
 
 	// Runs in the background: like the Share Extension, this only enqueues a request into the
 	// app group; the main app turns it into an actual feed the next time it processes the queue.
-	static let openAppWhenRun = false
+	@available(iOS 26.0, macOS 26.0, *)
+	static var supportedModes: IntentModes {
+		.background
+	}
 
 	@Parameter(title: LocalizedStringResource("URL", comment: "Label for a feed URL"))
 	var url: URL
