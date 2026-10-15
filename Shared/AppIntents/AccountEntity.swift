@@ -19,13 +19,24 @@ struct AccountEntity: AppEntity {
 	@Property(title: "Name")
 	var name: String
 
+	@Property(title: "Type")
+	var typeName: String
+
+	let iconData: Data?
+
 	var displayRepresentation: DisplayRepresentation {
-		DisplayRepresentation(title: "\(name)")
+		// Don't repeat the type when the account still has its default name.
+		let subtitle: LocalizedStringResource? = typeName == name ? nil : "\(typeName)"
+		return DisplayRepresentation(title: "\(name)", subtitle: subtitle, image: iconData.map { DisplayRepresentation.Image(data: $0) })
 	}
 
 	@MainActor init(account: Account) {
+		// Plain stored properties first: assigning an @Property goes through self.
 		self.id = account.accountID
+		self.iconData = Assets.accountImage(account.type).dataRepresentation()
+
 		self.name = account.nameForDisplay
+		self.typeName = account.type.displayName
 	}
 }
 
@@ -39,7 +50,7 @@ struct AccountEntityQuery: EntityStringQuery {
 
 	@MainActor func entities(matching string: String) async throws -> [AccountEntity] {
 		AccountManager.shared.sortedActiveAccounts
-			.filter { $0.nameForDisplay.localizedStandardContains(string) }
+			.filter { $0.nameForDisplay.localizedStandardContains(string) || $0.type.displayName.localizedStandardContains(string) }
 			.map { AccountEntity(account: $0) }
 	}
 
