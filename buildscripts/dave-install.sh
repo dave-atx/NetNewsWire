@@ -25,6 +25,7 @@ BACKUP_DIR="$HOME/Library/Application Support/NetNewsWire Install Backups"
 BACKUPS_TO_KEEP=5
 LOG_DIR="$HOME/Library/Logs/NetNewsWire dave-install"
 TESTFLIGHT_TAG_PREFIX="dave-testflight-"
+LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 
 # Colors (ANSI 256)
 PINK=212
@@ -556,6 +557,16 @@ if ((RUN_TESTS)); then
 		-destination "platform=macOS,arch=arm64" \
 		${DERIVED_DATA_ARGS[@]+"${DERIVED_DATA_ARGS[@]}"} \
 		test
+
+	# The tests' Debug host app gets registered with Launch Services, so Shortcuts lists its
+	# App Intents next to the installed Release app's, under the same name, and they never work
+	# (Debug skips app group access). Unregister it when installing Release.
+	if [[ "$CONFIGURATION" == "Release" ]]; then
+		TEST_HOST_APP=$(xcodebuild -project "$PROJECT_PATH" -scheme "$SCHEME" -configuration Debug \
+			-destination "platform=macOS,arch=arm64" ${DERIVED_DATA_ARGS[@]+"${DERIVED_DATA_ARGS[@]}"} \
+			-showBuildSettings 2>/dev/null | awk -F ' = ' '/^ *BUILT_PRODUCTS_DIR = / { print $2; exit }')/$APP_NAME
+		[[ -d "$TEST_HOST_APP" ]] && "$LSREGISTER" -u "$TEST_HOST_APP" 2>/dev/null
+	fi
 fi
 
 # Build
