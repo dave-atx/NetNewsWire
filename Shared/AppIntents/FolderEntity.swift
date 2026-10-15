@@ -23,12 +23,18 @@ struct FolderEntity: AppEntity {
 	@Property(title: "Account")
 	var accountName: String
 
+	/// True only in a list mixing several accounts' folders, where same-named folders need telling apart.
+	let showsAccountName: Bool
+
 	var displayRepresentation: DisplayRepresentation {
-		DisplayRepresentation(title: "\(name)", subtitle: "\(accountName)")
+		DisplayRepresentation(title: "\(name)", subtitle: showsAccountName ? "\(accountName)" : nil)
 	}
 
-	@MainActor init(folder: Folder, account: Account) {
+	@MainActor init(folder: Folder, account: Account, showsAccountName: Bool = false) {
+		// Plain stored properties first: assigning an @Property goes through self.
 		self.id = AccountScopedEntityID(accountID: account.accountID, itemID: folder.nameForDisplay)
+		self.showsAccountName = showsAccountName
+
 		self.name = folder.nameForDisplay
 		self.accountName = account.nameForDisplay
 	}
@@ -66,7 +72,7 @@ struct FolderEntityQuery: EntityStringQuery {
 			accounts = AccountManager.shared.sortedActiveAccounts
 		}
 		return accounts.flatMap { account in
-			(account.sortedFolders ?? []).map { FolderEntity(folder: $0, account: account) }
+			(account.sortedFolders ?? []).map { FolderEntity(folder: $0, account: account, showsAccountName: accounts.count > 1) }
 		}
 	}
 }
