@@ -391,6 +391,52 @@ verify_signature() {
 	else
 		info "   Gatekeeper: not accepted (expected for a non-notarized local build)"
 	fi
+
+	verify_app_groups "$team"
+}
+
+# macOS only grants a group.-prefixed app group without asking when the provisioning profile
+# authorizes it (a team-ID-prefixed one is always granted). Otherwise anything that runs without
+# a window (App Intents, the share and Safari extensions' queue) silently can't read the app
+# group container. See APP_GROUP_PREFIX in NetNewsWire_codesigning_common.xcconfig.
+verify_app_groups() {
+	local team=$1
+	local groups_key='com\.apple\.security\.application-groups'
+	local groups
+	groups=$(codesign -d --entitlements - --xml "$BUILT_APP" 2>/dev/null |
+		plutil -extract "$groups_key" json -o - - 2>/dev/null | tr -d '[]"' | tr ',' '\n')
+	if [[ -z "$groups" ]]; then
+		info "   App groups: none in entitlements"
+		return
+	fi
+
+	local profile="$BUILT_APP/Contents/embedded.provisionprofile"
+	local profile_plist profile_name profile_groups
+	profile_plist=$(security cms -D -i "$profile" 2>/dev/null)
+	profile_name=$(plutil -extract Name raw -o - - <<<"$profile_plist" 2>/dev/null)
+	profile_groups=$(plutil -extract "Entitlements.$groups_key" json -o - - <<<"$profile_plist" 2>/dev/null |
+		tr -d '[]"' | tr ',' '\n')
+	info "   Profile:   ${profile_name:-none}"
+
+	local group pattern authorized
+	while read -r group; do
+		[[ -n "$group" ]] || continue
+		if [[ -n "$team" && "$group" == "$team."* ]]; then
+			success "✅ App group $group has the team ID prefix, so needs no profile"
+			continue
+		fi
+		authorized=0
+		while read -r pattern; do
+			# Profiles can authorize wildcards such as TEAMID.*
+			# shellcheck disable=SC2053
+			[[ -n "$pattern" && "$group" == $pattern ]] && authorized=1
+		done <<<"$profile_groups"
+		if ((authorized)); then
+			success "✅ Profile authorizes app group $group"
+		else
+			warn "⚠️  Profile doesn't authorize app group $group: App Intents and extensions won't be able to read it"
+		fi
+	done <<<"$groups"
 }
 
 # === MAIN ===
