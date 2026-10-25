@@ -152,6 +152,8 @@ final class ArticleViewController: UIViewController {
 		articleExtractorBarButtonItem.title = NSLocalizedString("Reader View", comment: "Reader View")
 
 		if #available(iOS 26, *) {
+			#if compiler(>=6.3)
+			// This stops Xcode 26 having a hissy in CI.
 			if #available(iOS 27, *) {
 				readBarButtonItem.visibilityPriority = .standard
 				starBarButtonItem.visibilityPriority = .standard
@@ -159,6 +161,7 @@ final class ArticleViewController: UIViewController {
 				articleExtractorBarButtonItem.visibilityPriority = .low
 				actionBarButtonItem.visibilityPriority = .high
 			}
+			#endif
 			toolbarItems?.insert(articleExtractorBarButtonItem, at: 5)
 		} else {
 			let flex = { UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil) }
