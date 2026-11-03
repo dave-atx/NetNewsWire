@@ -35,6 +35,15 @@ final class ImageTransition: NSObject, UIViewControllerAnimatedTransitioning {
 
 	private func animateTransitionPresenting(using transitionContext: UIViewControllerContextTransitioning) {
 
+		// Size the image viewer to the presentation’s final frame before reading its zoomed frame.
+		// Otherwise it keeps its default size, the main screen’s bounds, which on a foldable can
+		// be a different display than the one the window is on.
+		if let toViewController = transitionContext.viewController(forKey: .to),
+		   let toView = transitionContext.view(forKey: .to) {
+			toView.frame = transitionContext.finalFrame(for: toViewController)
+			toView.layoutIfNeeded()
+		}
+
 		let imageView = UIImageView(image: originImage)
 		imageView.frame = originFrame
 
