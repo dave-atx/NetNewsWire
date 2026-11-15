@@ -55,6 +55,7 @@ final class DetailViewController: NSViewController, WKUIDelegate {
 			}
 			mouseoverLink = nil
 			containerView.contentView = webview
+			resetTextFinder()
 		}
 	}
 
@@ -104,6 +105,8 @@ final class DetailViewController: NSViewController, WKUIDelegate {
 		case .search:
 			detailStateForSearch = state
 		}
+
+		resetTextFinder()
 	}
 
 	func showDetail(for mode: TimelineSourceMode) {
@@ -141,6 +144,36 @@ final class DetailViewController: NSViewController, WKUIDelegate {
 			return
 		}
 		window.makeFirstResponderUnlessDescendantIsFirstResponder(currentWebViewController.webView)
+	}
+
+	// MARK: Find in Article
+
+	private var didLoadTextFinder = false
+	lazy private var textFinder: NSTextFinder = {
+		let finder = NSTextFinder()
+		finder.isIncrementalSearchingEnabled = true
+		finder.incrementalSearchingShouldDimContentView = false
+		finder.client = self.currentWebViewController.webView
+		finder.findBarContainer = self.containerView
+		didLoadTextFinder = true
+		return finder
+	}()
+
+	private func resetTextFinder() {
+		if didLoadTextFinder {
+			self.textFinder.performAction(.hideFindInterface)
+			self.textFinder.client = currentWebViewController.webView
+		}
+	}
+
+	@IBAction func performFindPanelAction(_ sender: Any?) {
+		if let menuItem = sender as? NSMenuItem, let findAction = NSTextFinder.Action(rawValue: menuItem.tag) {
+			self.textFinder.performAction(findAction)
+		}
+	}
+
+	var canFindInCurrentArticle: Bool {
+		currentWebViewController.canFindInArticle
 	}
 }
 
