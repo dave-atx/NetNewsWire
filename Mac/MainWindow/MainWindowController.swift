@@ -351,6 +351,10 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
 			return isShown
 		}
 
+		if item.action == #selector(performFindPanelAction(_:)) {
+			return self.detailViewController?.validateFindPanelAction(item) ?? false
+		}
+
 		return true
 	}
 
@@ -655,6 +659,10 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
 
 	@IBAction func sortArticlesDescending(_ sender: Any?) {
 		timelineContainerViewController?.setSortDirection(.orderedDescending)
+	}
+
+	@IBAction  func performFindPanelAction(_ sender: Any?) {
+		self.detailViewController?.performFindPanelAction(sender)
 	}
 
 	@objc func selectArticleTheme(_ menuItem: NSMenuItem) {

@@ -40,14 +40,25 @@
                         <outlet property="urlLabel" destination="Dim-ed-Dcz" id="8fY-oo-cGT"/>
                     </connections>
                 </customView>
+                <customView translatesAutoresizingMaskIntoConstraints="NO" id="lMN-Bl-G9Q" userLabel="Find Bar Container View">
+                    <rect key="frame" x="0.0" y="300" width="730" height="0.0"/>
+                    <constraints>
+                        <constraint firstAttribute="height" id="C1e-J5-baX"/>
+                    </constraints>
+                </customView>
             </subviews>
             <viewLayoutGuide key="safeArea" id="sAr-ea-gd1"/>
             <constraints>
                 <constraint firstItem="xI5-lx-RD8" firstAttribute="leading" secondItem="sAr-ea-gd1" secondAttribute="leading" constant="6" id="5vz-ys-CAo"/>
                 <constraint firstItem="sAr-ea-gd1" firstAttribute="trailing" relation="greaterThanOrEqual" secondItem="xI5-lx-RD8" secondAttribute="trailing" constant="6" id="pbD-LN-Gk1"/>
                 <constraint firstAttribute="bottom" secondItem="xI5-lx-RD8" secondAttribute="bottom" constant="2" id="zsv-B0-ChW"/>
+                <constraint firstItem="lMN-Bl-G9Q" firstAttribute="top" secondItem="sAr-ea-gd1" secondAttribute="top" id="Qyj-r4-LOb"/>
+                <constraint firstItem="lMN-Bl-G9Q" firstAttribute="leading" secondItem="sAr-ea-gd1" secondAttribute="leading" id="fjq-7Z-e0q"/>
+                <constraint firstItem="sAr-ea-gd1" firstAttribute="trailing" secondItem="lMN-Bl-G9Q" secondAttribute="trailing" id="oth-5X-F9R"/>
             </constraints>
             <connections>
+                <outlet property="findBarContainerView" destination="lMN-Bl-G9Q" id="zMP-iV-uSN"/>
+                <outlet property="findBarHeightConstraint" destination="C1e-J5-baX" id="Q4g-LU-JWK"/>
                 <outlet property="linkOverlayView" destination="xI5-lx-RD8" id="yIZ-aP-fKF"/>
             </connections>
         </customView>
