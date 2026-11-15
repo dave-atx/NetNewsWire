@@ -50,14 +50,18 @@ final class DetailContainerView: NSView, @MainActor NSTextFinderBarContainer {
 		return contentView.topAnchor.constraint(equalTo: topAnchor)
 	}
 
-	private func updateContentViewTopConstraint() {
-		guard let contentView, var constraints = contentViewConstraints, let index = constraints.firstIndex(where: { $0.firstAttribute == .top }) else {
-			return
+	override func updateConstraints() {
+		// The web view sits below the find bar while it’s visible.
+		if let contentView, var constraints = contentViewConstraints, let index = constraints.firstIndex(where: { $0.firstAttribute == .top }) {
+			let topConstraint = contentViewTopConstraint(contentView)
+			if topConstraint.secondItem !== constraints[index].secondItem {
+				constraints[index].isActive = false
+				topConstraint.isActive = true
+				constraints[index] = topConstraint
+				contentViewConstraints = constraints
+			}
 		}
-		constraints[index].isActive = false
-		constraints[index] = contentViewTopConstraint(contentView)
-		constraints[index].isActive = true
-		contentViewConstraints = constraints
+		super.updateConstraints()
 	}
 
 	override func draw(_ dirtyRect: NSRect) {
@@ -101,8 +105,7 @@ final class DetailContainerView: NSView, @MainActor NSTextFinderBarContainer {
 				}
 			}
 
-			// The web view sits below the find bar while it’s visible.
-			updateContentViewTopConstraint()
+			needsUpdateConstraints = true
 		}
 	}
 
