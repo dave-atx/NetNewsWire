@@ -13,22 +13,52 @@ import SwiftUI
 import UniformTypeIdentifiers
 import RSCore
 import Account
+import ActivityLog
 
 final class SettingsViewController: UITableViewController {
 
+	private enum Section: Int {
+		case notifications = 0
+		case accounts = 1
+		case feeds = 2
+		case moreScreens = 3
+		case troubleshooting = 4
+		case help = 5
+	}
+
+	private enum MoreScreensRow: Int {
+		case appearance = 0
+		case sidebar = 1
+		case timeline = 2
+		case articles = 3
+	}
+
+	private enum TroubleshootingRow: Int {
+		case errorLog = 0
+		case activityLog = 1
+		case accountStats = 2
+		case dinosaurs = 3
+		case cloudKitZoneStats = 4
+	}
+
+	private enum HelpRow: Int {
+		case help = 0
+		case forum = 1
+		case releaseNotes = 2
+		case bugTracker = 3
+		case about = 4
+	}
+
+	private enum FeedsRow: Int {
+		case importSubscriptions = 0
+		case exportSubscriptions = 1
+		case addNetNewsWireNewsFeed = 2
+	}
+
 	private weak var opmlAccount: Account?
 
-	@IBOutlet var timelineSortOrderSwitch: UISwitch!
-	@IBOutlet var groupByFeedSwitch: UISwitch!
-	@IBOutlet var refreshClearsReadArticlesSwitch: UISwitch!
-	@IBOutlet var articleThemeDetailLabel: UILabel!
-	@IBOutlet var confirmMarkAllAsReadSwitch: UISwitch!
-	@IBOutlet var showFullscreenArticlesSwitch: UISwitch!
-	@IBOutlet var colorPaletteDetailLabel: UILabel!
-	@IBOutlet var openLinksInNetNewsWire: UISwitch!
-	@IBOutlet var enableJavaScriptSwitch: UISwitch!
-
-	var scrollToArticlesSection = false
+	/// Pushes the Timeline screen on appearing, so a user can turn off the Mark All as Read confirmation.
+	var showTimelineSettings = false
 	weak var presentingParentController: UIViewController?
 
 	override func viewDidLoad() {
@@ -50,88 +80,46 @@ final class SettingsViewController: UITableViewController {
 	override func viewWillAppear(_ animated: Bool) {
 		super.viewWillAppear(animated)
 
-		if AppDefaults.shared.timelineSortDirection == .orderedAscending {
-			timelineSortOrderSwitch.isOn = true
-		} else {
-			timelineSortOrderSwitch.isOn = false
-		}
-
-		if AppDefaults.shared.timelineGroupByFeed {
-			groupByFeedSwitch.isOn = true
-		} else {
-			groupByFeedSwitch.isOn = false
-		}
-
-		if AppDefaults.shared.refreshClearsReadArticles {
-			refreshClearsReadArticlesSwitch.isOn = true
-		} else {
-			refreshClearsReadArticlesSwitch.isOn = false
-		}
-
-		articleThemeDetailLabel.text = ArticleThemesManager.shared.currentTheme.name
-
-		if AppDefaults.shared.confirmMarkAllAsRead {
-			confirmMarkAllAsReadSwitch.isOn = true
-		} else {
-			confirmMarkAllAsReadSwitch.isOn = false
-		}
-
-		if AppDefaults.shared.articleFullscreenAvailable {
-			showFullscreenArticlesSwitch.isOn = true
-		} else {
-			showFullscreenArticlesSwitch.isOn = false
-		}
-
-		if AppDefaults.shared.isArticleContentJavascriptEnabled {
-			enableJavaScriptSwitch.isOn = true
-		} else {
-			enableJavaScriptSwitch.isOn = false
-		}
-
-		colorPaletteDetailLabel.text = String(describing: AppDefaults.userInterfaceColorPalette)
-
-		openLinksInNetNewsWire.isOn = !AppDefaults.shared.useSystemBrowser
-
-		let buildLabel = NonIntrinsicLabel(frame: CGRect(x: 32.0, y: 0.0, width: 0.0, height: 0.0))
+		let buildLabel = CopyableLabel(frame: CGRect(x: 32.0, y: 0.0, width: 0.0, height: 0.0))
 		buildLabel.font = UIFont.systemFont(ofSize: 11.0)
 		buildLabel.textColor = UIColor.gray
-		buildLabel.text = "\(Bundle.main.appName) \(Bundle.main.versionNumber) (Build \(Bundle.main.buildNumber))"
+		buildLabel.text = "\(Bundle.main.appName) \(Bundle.main.versionNumber) (build \(Bundle.main.buildNumber))"
 		buildLabel.sizeToFit()
-		buildLabel.translatesAutoresizingMaskIntoConstraints = false
 
-		let wrapperView = UIView(frame: CGRect(x: 0, y: 0, width: buildLabel.frame.width, height: buildLabel.frame.height + 10.0))
-		wrapperView.translatesAutoresizingMaskIntoConstraints = false
+		let wrapperView = UIView(frame: CGRect(x: 0, y: 0, width: tableView.bounds.width, height: buildLabel.frame.height + 10.0))
 		wrapperView.addSubview(buildLabel)
 		tableView.tableFooterView = wrapperView
-
 	}
 
 	override func viewDidAppear(_ animated: Bool) {
 		super.viewDidAppear(animated)
 		self.tableView.selectRow(at: nil, animated: true, scrollPosition: .none)
 
-		if scrollToArticlesSection {
-			tableView.scrollToRow(at: IndexPath(row: 0, section: 4), at: .top, animated: true)
-			scrollToArticlesSection = false
+		if showTimelineSettings {
+			showTimelineSettings = false
+			navigationController?.pushViewController(TimelineSettingsViewController(), animated: true)
 		}
-
 	}
 
 	// MARK: UITableView
 
 	override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
 
-		switch section {
-		case 1:
+		switch Section(rawValue: section) {
+		case .accounts:
 			return AccountManager.shared.accounts.count + 1
-		case 2:
+		case .feeds:
 			let defaultNumberOfRows = super.tableView(tableView, numberOfRowsInSection: section)
 			if AccountManager.shared.activeAccounts.isEmpty || AccountManager.shared.anyAccountHasNetNewsWireNewsSubscription() {
 				return defaultNumberOfRows - 1
 			}
 			return defaultNumberOfRows
-		case 4:
-			return traitCollection.userInterfaceIdiom == .phone ? 5 : 4
+		case .troubleshooting:
+			let defaultNumberOfRows = super.tableView(tableView, numberOfRowsInSection: section)
+			if !AccountManager.shared.hasiCloudAccount {
+				return defaultNumberOfRows - 1
+			}
+			return defaultNumberOfRows
 		default:
 			return super.tableView(tableView, numberOfRowsInSection: section)
 		}
@@ -140,13 +128,13 @@ final class SettingsViewController: UITableViewController {
 	override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
 
 		let cell: UITableViewCell
-		switch indexPath.section {
-		case 1:
+		switch Section(rawValue: indexPath.section) {
+		case .accounts:
 
 			let sortedAccounts = AccountManager.shared.sortedAccounts
 			if indexPath.row == sortedAccounts.count {
 				cell = tableView.dequeueReusableCell(withIdentifier: "SettingsTableViewCell", for: indexPath)
-				cell.textLabel?.text = NSLocalizedString("Add Account", comment: "Accounts")
+				cell.textLabel?.text = NSLocalizedString("Add Account", comment: "Add Account")
 			} else {
 				let acctCell = tableView.dequeueReusableCell(withIdentifier: "SettingsComboTableViewCell", for: indexPath) as! SettingsComboTableViewCell
 				acctCell.applyThemeProperties()
@@ -165,74 +153,99 @@ final class SettingsViewController: UITableViewController {
 
 	override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
 
-		switch indexPath.section {
-		case 0:
+		switch Section(rawValue: indexPath.section) {
+		case .notifications:
 			UIApplication.shared.open(URL(string: "\(UIApplication.openSettingsURLString)")!)
 			tableView.selectRow(at: nil, animated: true, scrollPosition: .none)
-		case 1:
+		case .accounts:
 			let sortedAccounts = AccountManager.shared.sortedAccounts
 			if indexPath.row == sortedAccounts.count {
-				let controller = UIStoryboard.settings.instantiateController(ofType: AddAccountViewController.self)
-				self.navigationController?.pushViewController(controller, animated: true)
+				let addAccountView = AddAccountView(presentationAnchor: view.window) { [weak self] in
+					self?.navigationController?.popViewController(animated: false)
+				}
+				self.navigationController?.pushViewController(UIHostingController(rootView: addAccountView), animated: true)
 			} else {
 				let controller = UIStoryboard.inspector.instantiateController(ofType: AccountInspectorViewController.self)
 				controller.account = sortedAccounts[indexPath.row]
 				self.navigationController?.pushViewController(controller, animated: true)
 			}
-		case 2:
-			switch indexPath.row {
-			case 0:
+		case .feeds:
+			switch FeedsRow(rawValue: indexPath.row) {
+			case .importSubscriptions:
 				tableView.selectRow(at: nil, animated: true, scrollPosition: .none)
 				if let sourceView = tableView.cellForRow(at: indexPath) {
 					let sourceRect = tableView.rectForRow(at: indexPath)
 					importOPML(sourceView: sourceView, sourceRect: sourceRect)
 				}
-			case 1:
+			case .exportSubscriptions:
 				tableView.selectRow(at: nil, animated: true, scrollPosition: .none)
 				if let sourceView = tableView.cellForRow(at: indexPath) {
 					let sourceRect = tableView.rectForRow(at: indexPath)
 					exportOPML(sourceView: sourceView, sourceRect: sourceRect)
 				}
-			case 2:
+			case .addNetNewsWireNewsFeed:
 				addFeed()
 				tableView.selectRow(at: nil, animated: true, scrollPosition: .none)
 			default:
 				break
 			}
-		case 3:
-			switch indexPath.row {
-			case 3:
-				let timeline = UIStoryboard.settings.instantiateController(ofType: TimelineCustomizerCollectionViewController.self)
-				self.navigationController?.pushViewController(timeline, animated: true)
+		case .moreScreens:
+			switch MoreScreensRow(rawValue: indexPath.row) {
+			case .sidebar:
+				self.navigationController?.pushViewController(SidebarSettingsViewController(), animated: true)
+			case .timeline:
+				self.navigationController?.pushViewController(TimelineSettingsViewController(), animated: true)
+			case .articles:
+				self.navigationController?.pushViewController(ArticlesSettingsViewController(), animated: true)
+			case .appearance:
+				self.navigationController?.pushViewController(GeneralSettingsViewController(), animated: true)
 			default:
 				break
 			}
-		case 4:
-			switch indexPath.row {
-			case 0:
-				let articleThemes = UIStoryboard.settings.instantiateController(ofType: ArticleThemesTableViewController.self)
-				self.navigationController?.pushViewController(articleThemes, animated: true)
-			default:
-				break
+		case .troubleshooting:
+			let viewController: UIViewController? = {
+				switch TroubleshootingRow(rawValue: indexPath.row) {
+				case .errorLog:
+					return UIHostingController(rootView: ErrorLogView())
+				case .accountStats:
+					return UIHostingController(rootView: AccountStatsView())
+				case .cloudKitZoneStats:
+					return UIHostingController(rootView: CloudKitStatsView())
+				case .activityLog:
+					return UIHostingController(rootView: ActivityLogView())
+				case .dinosaurs:
+					return UIHostingController(rootView: DinosaursView(dismissAndPresent: { [weak self] dinosaur in
+						guard let self else {
+							return
+						}
+						self.dismiss(animated: true) {
+							if let rootSplit = self.presentingParentController as? RootSplitViewController {
+								rootSplit.coordinator.discloseFeed(dinosaur.feed, animations: [.scroll, .navigation])
+							}
+						}
+					}))
+				default:
+					return nil
+				}
+			}()
+			if let viewController {
+				self.navigationController?.pushViewController(viewController, animated: true)
 			}
-		case 5:
-			let colorPalette = UIStoryboard.settings.instantiateController(ofType: ColorPaletteTableViewController.self)
-			self.navigationController?.pushViewController(colorPalette, animated: true)
-		case 6:
-			switch indexPath.row {
-			case 0:
+		case .help:
+			switch HelpRow(rawValue: indexPath.row) {
+			case .help:
 				openURL(HelpURL.helpHome.rawValue)
 				tableView.selectRow(at: nil, animated: true, scrollPosition: .none)
-			case 1:
+			case .forum:
 				openURL(HelpURL.discourse.rawValue)
 				tableView.selectRow(at: nil, animated: true, scrollPosition: .none)
-			case 2:
+			case .releaseNotes:
 				openURL(HelpURL.releaseNotes.rawValue)
 				tableView.selectRow(at: nil, animated: true, scrollPosition: .none)
-			case 3:
+			case .bugTracker:
 				openURL(HelpURL.bugTracker.rawValue)
 				tableView.selectRow(at: nil, animated: true, scrollPosition: .none)
-			case 4:
+			case .about:
 				let hosting = UIHostingController(rootView: AboutView())
 				self.navigationController?.pushViewController(hosting, animated: true)
 			default:
@@ -260,7 +273,7 @@ final class SettingsViewController: UITableViewController {
 	}
 
 	override func tableView(_ tableView: UITableView, indentationLevelForRowAt indexPath: IndexPath) -> Int {
-		return super.tableView(tableView, indentationLevelForRowAt: IndexPath(row: 0, section: 1))
+		return super.tableView(tableView, indentationLevelForRowAt: IndexPath(row: 0, section: Section.accounts.rawValue))
 	}
 
 	// MARK: Actions
@@ -268,58 +281,6 @@ final class SettingsViewController: UITableViewController {
 	@IBAction func done(_ sender: Any) {
 		dismiss(animated: true)
 	}
-
-	@IBAction func switchTimelineOrder(_ sender: Any) {
-		if timelineSortOrderSwitch.isOn {
-			AppDefaults.shared.timelineSortDirection = .orderedAscending
-		} else {
-			AppDefaults.shared.timelineSortDirection = .orderedDescending
-		}
-	}
-
-	@IBAction func switchGroupByFeed(_ sender: Any) {
-		if groupByFeedSwitch.isOn {
-			AppDefaults.shared.timelineGroupByFeed = true
-		} else {
-			AppDefaults.shared.timelineGroupByFeed = false
-		}
-	}
-
-	@IBAction func switchClearsReadArticles(_ sender: Any) {
-		if refreshClearsReadArticlesSwitch.isOn {
-			AppDefaults.shared.refreshClearsReadArticles = true
-		} else {
-			AppDefaults.shared.refreshClearsReadArticles = false
-		}
-	}
-
-	@IBAction func switchConfirmMarkAllAsRead(_ sender: Any) {
-		if confirmMarkAllAsReadSwitch.isOn {
-			AppDefaults.shared.confirmMarkAllAsRead = true
-		} else {
-			AppDefaults.shared.confirmMarkAllAsRead = false
-		}
-	}
-
-	@IBAction func switchFullscreenArticles(_ sender: Any) {
-		if showFullscreenArticlesSwitch.isOn {
-			AppDefaults.shared.articleFullscreenAvailable = true
-		} else {
-			AppDefaults.shared.articleFullscreenAvailable = false
-		}
-	}
-
-	@IBAction func switchBrowserPreference(_ sender: Any) {
-		if openLinksInNetNewsWire.isOn {
-			AppDefaults.shared.useSystemBrowser = false
-		} else {
-			AppDefaults.shared.useSystemBrowser = true
-		}
-	}
-
-	@IBAction func switchJavaScriptPreference(_ sender: Any) {
-		AppDefaults.shared.isArticleContentJavascriptEnabled = enableJavaScriptSwitch.isOn
- 	}
 
 	// MARK: - Notifications
 
@@ -369,14 +330,12 @@ private extension SettingsViewController {
 	func addFeed() {
 		self.dismiss(animated: true)
 
-		let addNavViewController = UIStoryboard.add.instantiateViewController(withIdentifier: "AddFeedViewControllerNav") as! UINavigationController
-		let addViewController = addNavViewController.topViewController as! AddFeedViewController
-		addViewController.initialFeed = AccountManager.netNewsWireNewsURL
-		addViewController.initialFeedName = NSLocalizedString("NetNewsWire News", comment: "NetNewsWire News")
-		addNavViewController.modalPresentationStyle = .formSheet
-		addNavViewController.preferredContentSize = AddFeedViewController.preferredContentSizeForFormSheetDisplay
+		let addFeedView = AddFeedView(initialFeed: AccountManager.netNewsWireNewsURL, initialFeedName: NSLocalizedString("NetNewsWire News", comment: "NetNewsWire News"))
+		let hostingController = UIHostingController(rootView: addFeedView)
+		hostingController.modalPresentationStyle = .formSheet
+		hostingController.preferredContentSize = UIViewController.formSheetSize
 
-		presentingParentController?.present(addNavViewController, animated: true)
+		presentingParentController?.present(hostingController, animated: true)
 	}
 
 	func importOPML(sourceView: UIView, sourceRect: CGRect) {
@@ -408,7 +367,7 @@ private extension SettingsViewController {
 			alert.addAction(action)
 		}
 
-		let cancelTitle = NSLocalizedString("Cancel", comment: "Cancel")
+		let cancelTitle = NSLocalizedString("Cancel", comment: "Cancel button")
 		alert.addAction(UIAlertAction(title: cancelTitle, style: .cancel))
 
 		self.present(alert, animated: true)
@@ -464,7 +423,7 @@ private extension SettingsViewController {
 			alert.addAction(action)
 		}
 
-		let cancelTitle = NSLocalizedString("Cancel", comment: "Cancel")
+		let cancelTitle = NSLocalizedString("Cancel", comment: "Cancel button")
 		alert.addAction(UIAlertAction(title: cancelTitle, style: .cancel))
 
 		self.present(alert, animated: true)
@@ -476,9 +435,11 @@ private extension SettingsViewController {
 		let accountName = account.nameForDisplay.replacingOccurrences(of: " ", with: "").trimmingCharacters(in: .whitespaces)
 		let filename = "Subscriptions-\(accountName).opml"
 		let tempFile = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
-		let opmlString = OPMLExporter.OPMLString(with: account, title: filename)
 		do {
-			try opmlString.write(to: tempFile, atomically: true, encoding: String.Encoding.utf8)
+			try account.logActivity(kind: .exportOPML, detail: filename) {
+				let opmlString = OPMLExporter.OPMLString(with: account, title: filename)
+				try opmlString.write(to: tempFile, atomically: true, encoding: String.Encoding.utf8)
+			}
 		} catch {
 			self.presentError(title: "OPML Export Error", message: error.localizedDescription)
 		}
@@ -489,7 +450,25 @@ private extension SettingsViewController {
 	}
 
 	func openURL(_ urlString: String) {
-		let vc = SFSafariViewController(url: URL(string: urlString)!)
+		guard let url = URL(string: urlString) else {
+			return
+		}
+
+		// Open GitHub links in the GitHub app when installed.
+		if let host = url.host, host == "github.com" || host.hasSuffix(".github.com") {
+			UIApplication.shared.open(url, options: [.universalLinksOnly: true]) { [weak self] openedInApp in
+				if !openedInApp {
+					self?.presentSafariViewController(for: url)
+				}
+			}
+			return
+		}
+
+		presentSafariViewController(for: url)
+	}
+
+	private func presentSafariViewController(for url: URL) {
+		let vc = SFSafariViewController(url: url)
 		vc.modalPresentationStyle = .pageSheet
 		present(vc, animated: true)
 	}

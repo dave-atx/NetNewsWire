@@ -10,6 +10,7 @@ import Foundation
 import Articles
 import Account
 import RSCore
+import Images
 
 protocol SmallIconProvider {
 	@MainActor var smallIcon: IconImage? { get }
@@ -24,10 +25,7 @@ protocol SmallIconProvider {
 
 @MainActor extension Feed: SmallIconProvider {
 	var smallIcon: IconImage? {
-		if let iconImage = FaviconDownloader.shared.favicon(for: self) {
-			return iconImage
-		}
-		return FaviconGenerator.favicon(self)
+		IconImageCache.shared.iconImage(for: self)
 	}
 }
 

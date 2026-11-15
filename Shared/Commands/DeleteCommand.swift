@@ -13,7 +13,6 @@ import Account
 import Articles
 
 final class DeleteCommand: UndoableCommand {
-	let treeController: TreeController?
 	let undoManager: UndoManager
 	let undoActionName: String
 	var redoActionName: String {
@@ -23,7 +22,7 @@ final class DeleteCommand: UndoableCommand {
 
 	private let itemSpecifiers: [SidebarItemSpecifier]
 
-	@MainActor init?(nodesToDelete: [Node], treeController: TreeController? = nil, undoManager: UndoManager, errorHandler: @escaping (Error) -> Void) {
+	@MainActor init?(nodesToDelete: [Node], undoManager: UndoManager, errorHandler: @escaping (Error) -> Void) {
 
 		guard DeleteCommand.canDelete(nodesToDelete) else {
 			return nil
@@ -32,7 +31,6 @@ final class DeleteCommand: UndoableCommand {
 			return nil
 		}
 
-		self.treeController = treeController
 		self.undoActionName = actionName
 		self.undoManager = undoManager
 		self.errorHandler = errorHandler
@@ -55,8 +53,7 @@ final class DeleteCommand: UndoableCommand {
 		}
 
 		group.notify(queue: DispatchQueue.main) {
-			MainActor.assumeIsolated {
-				self.treeController?.rebuild()
+			Task { @MainActor in
 				self.registerUndo()
 			}
 		}
@@ -141,21 +138,26 @@ final class DeleteCommand: UndoableCommand {
 
 	func delete(completion: @escaping () -> Void) {
 		if let feed {
-			guard let container = path.resolveContainer() else {
+			guard let account, let container = path.resolveContainer() else {
 				completion()
 				return
 			}
 
 			BatchUpdate.shared.start()
-			account?.removeFeed(feed, from: container) { result in
+			account.removeFeed(feed, from: container) { result in
 				BatchUpdate.shared.end()
 				completion()
 				self.checkResult(result)
 			}
 
 		} else if let folder {
+			guard let account else {
+				completion()
+				return
+			}
+
 			BatchUpdate.shared.start()
-			account?.removeFolder(folder) { result in
+			account.removeFolder(folder) { result in
 				BatchUpdate.shared.end()
 				completion()
 				self.checkResult(result)
@@ -244,9 +246,9 @@ final class DeleteCommand: UndoableCommand {
 
 private struct DeleteActionName {
 
-	private static let deleteFeed = NSLocalizedString("Delete Feed", comment: "command")
-	private static let deleteFeeds = NSLocalizedString("Delete Feeds", comment: "command")
-	private static let deleteFolder = NSLocalizedString("Delete Folder", comment: "command")
+	private static let deleteFeed = NSLocalizedString("Delete Feed", comment: "Delete Feed")
+	private static let deleteFeeds = NSLocalizedString("Delete Feeds", comment: "Delete Feeds")
+	private static let deleteFolder = NSLocalizedString("Delete Folder", comment: "Command")
 	private static let deleteFolders = NSLocalizedString("Delete Folders", comment: "command")
 	private static let deleteFeedsAndFolders = NSLocalizedString("Delete Feeds and Folders", comment: "command")
 

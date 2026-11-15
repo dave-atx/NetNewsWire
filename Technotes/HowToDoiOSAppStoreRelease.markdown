@@ -10,7 +10,7 @@ Fill in What’s New text
 Click Save at top of screen
 Click Add for Review next to Save
 
-On next screen, click Submit to App Review
+On next screen, click Submit for Review
 
 Once it appears on App Store…
 

@@ -7,7 +7,12 @@
 
 import Foundation
 import Network
-import os
+import Synchronization
+
+extension Notification.Name {
+	/// Posted on the main thread when `isConnected` or `isConstrained` changes.
+	public static let networkStatusDidChange = Notification.Name("NetworkStatusDidChange")
+}
 
 nonisolated public final class NetworkMonitor: Sendable {
 	public static let shared = NetworkMonitor()
@@ -16,25 +21,21 @@ nonisolated public final class NetworkMonitor: Sendable {
 	private let queue = DispatchQueue(label: "RSWeb NetworkMonitor")
 
 	private struct State: Sendable {
-		var isConnected = false
+		var isConnected: Bool?
 		var connectionType: NWInterface.InterfaceType?
-		var isExpensive = false
 		var isConstrained = false
 	}
 
-	private let state = OSAllocatedUnfairLock<State>(initialState: State())
+	private let state = Mutex(State())
 
+	/// `true` until `NWPathMonitor` delivers its first path, so callers attempt
+	/// network work rather than skip it on an answer we don't have yet.
 	public var isConnected: Bool {
-		state.withLock { $0.isConnected }
+		state.withLock { $0.isConnected ?? true }
 	}
 
 	public var connectionType: NWInterface.InterfaceType? {
 		state.withLock { $0.connectionType }
-	}
-
-	/// Is the connection expensive (cellular data with limited plan, for instance)
-	public var isExpensive: Bool {
-		state.withLock { $0.isExpensive }
 	}
 
 	/// Is the connection constrained (Low Data Mode enabled, for instance)
@@ -66,11 +67,19 @@ nonisolated public final class NetworkMonitor: Sendable {
 	}
 
 	private func updateStatus(with path: NWPath) {
-		state.withLock { state in
-			state.isConnected = path.status == .satisfied
+		let statusDidChange = state.withLock { state in
+			let isConnected = path.status == .satisfied
+			let statusDidChange = isConnected != (state.isConnected ?? true) || path.isConstrained != state.isConstrained
+			state.isConnected = isConnected
 			state.connectionType = path.availableInterfaces.first?.type
-			state.isExpensive = path.isExpensive
 			state.isConstrained = path.isConstrained
+			return statusDidChange
+		}
+		guard statusDidChange else {
+			return
+		}
+		Task { @MainActor in
+			NotificationCenter.default.post(name: .networkStatusDidChange, object: self)
 		}
 	}
 }

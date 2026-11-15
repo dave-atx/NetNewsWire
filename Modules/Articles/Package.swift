@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
 	name: "Articles",
-	platforms: [.macOS(.v26), .iOS(.v26)],
+	platforms: [.macOS(.v15), .iOS(.v18)],
 	products: [
 		.library(
 			name: "Articles",
@@ -22,6 +22,9 @@ let package = Package(
 			swiftSettings: [
 				.enableUpcomingFeature("NonisolatedNonsendingByDefault"),
 				.enableUpcomingFeature("InferIsolatedConformances")
-			])
+			]),
+		.testTarget(
+			name: "ArticlesTests",
+			dependencies: ["Articles"])
 	]
 )

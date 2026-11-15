@@ -1,0 +1,301 @@
+//
+//  MainTimelineCell.swift
+//  NetNewsWire-iOS
+//
+//  Created by Brent Simmons on 6/22/26.
+//
+
+import UIKit
+import RSCore
+import Images
+
+///  Manual-layout timeline cell modeled on the Mac timeline
+///  and the pre-7.0 iOS table view cell.
+final class MainTimelineCell: UICollectionViewListCell {
+
+	static let reuseIdentifier = "MainTimelineCell"
+	private static let readArticleAlpha: CGFloat = 0.6
+
+	var isPreview = false
+
+	private let titleView = MainTimelineCell.multiLineLabel()
+	private let summaryView = MainTimelineCell.multiLineLabel()
+	private let dateView = MainTimelineCell.singleLineLabel()
+	private let feedNameView = MainTimelineCell.singleLineLabel()
+	private lazy var iconView = IconView()
+	private lazy var indicatorView = IconView()
+	private let thumbnailView = UIImageView()
+	/// Lines up the system separator with the text.
+	private lazy var separatorLeadingConstraint = separatorLayoutGuide.leadingAnchor.constraint(equalTo: contentView.leadingAnchor)
+
+	var cellData: MainTimelineCellData! {
+		didSet {
+			updateSubviews()
+		}
+	}
+
+	/// The image shown now, which can be newer than `cellData.thumbnail`. Setting this leaves the rest of the cell as it is.
+	var thumbnail: UIImage? {
+		get {
+			thumbnailView.image
+		}
+		set {
+			setThumbnailImage(newValue)
+		}
+	}
+
+	override init(frame: CGRect) {
+		super.init(frame: frame)
+		commonInit()
+	}
+
+	required init?(coder: NSCoder) {
+		super.init(coder: coder)
+		commonInit()
+	}
+
+	override func prepareForReuse() {
+		super.prepareForReuse()
+		indicatorView.isHidden = true
+		setThumbnailImage(nil)
+	}
+
+	override func preferredLayoutAttributesFitting(_ layoutAttributes: UICollectionViewLayoutAttributes) -> UICollectionViewLayoutAttributes {
+		guard layoutAttributes.frame.width > 0 else {
+			return layoutAttributes
+		}
+		let layout = updatedLayout(width: layoutAttributes.frame.width)
+		layoutAttributes.frame.size.height = layout.height
+		return layoutAttributes
+	}
+
+	override func layoutSubviews() {
+		super.layoutSubviews()
+
+		let layout = updatedLayout(width: contentView.bounds.width)
+
+		setFrame(for: titleView, rect: layout.titleRect)
+		setFrame(for: summaryView, rect: layout.summaryRect)
+		feedNameView.setFrameIfNotEqual(layout.feedNameRect)
+		dateView.setFrameIfNotEqual(layout.dateRect)
+		iconView.setFrameIfNotEqual(layout.iconImageRect)
+		// Sized to the image, so the corner radius rounds the image itself. All of the rect until the image arrives.
+		thumbnailView.setFrameIfNotEqual(layout.thumbnailRect.aspectFitRect(for: thumbnailView.image?.size ?? .zero))
+		indicatorView.setFrameIfNotEqual(cellData.starred ? layout.starRect : layout.unreadIndicatorRect)
+		if separatorLeadingConstraint.constant != layout.separatorRect.minX {
+			separatorLeadingConstraint.constant = layout.separatorRect.minX
+		}
+	}
+
+	override func updateConfiguration(using state: UICellConfigurationState) {
+		super.updateConfiguration(using: state)
+
+		var backgroundConfig = UIBackgroundConfiguration.listCell().updated(for: state)
+		// The Settings timeline preview isn't in the split view hierarchy, so style it
+		// the way the timeline usually looks on the device.
+		let usesExpandedStyle = isPreview ? UIDevice.current.userInterfaceIdiom == .pad : isInExpandedSplitView
+		if !usesExpandedStyle {
+			// Full-bleed rectangle selection when the timeline has the screen to itself.
+			// When the split view is expanded — iPad, or a large iPhone in landscape —
+			// it gets the rounded, inset selection below.
+			backgroundConfig.cornerRadius = 0
+			backgroundConfig.backgroundInsets = .zero
+			backgroundConfig.edgesAddingLayoutMarginsToBackgroundInsets = []
+		} else if #available(iOS 26, *) {
+			backgroundConfig.cornerRadius = 20
+			backgroundConfig.edgesAddingLayoutMarginsToBackgroundInsets = [.leading, .trailing]
+			if UIDevice.current.userInterfaceIdiom == .pad {
+				backgroundConfig.backgroundInsets = NSDirectionalEdgeInsets(top: 0, leading: -8, bottom: 0, trailing: -8)
+			} else if isPreview {
+				backgroundConfig.backgroundInsets = NSDirectionalEdgeInsets(top: 0, leading: -16, bottom: 0, trailing: -16)
+			} else {
+				backgroundConfig.backgroundInsets = NSDirectionalEdgeInsets(top: 0, leading: -12, bottom: 0, trailing: -12)
+			}
+		} else {
+			backgroundConfig.cornerRadius = 0
+		}
+
+		let showsAccentSelection = isActiveSelection(state)
+
+		if state.isSwiped {
+			backgroundConfig.backgroundColor = .secondarySystemFill
+		} else if state.isSelected {
+			// When collapsed, keep the standard system selection color from updated(for: state).
+			if isInExpandedSplitView {
+				backgroundConfig.backgroundColor = showsAccentSelection ? Assets.Colors.primaryAccent : .tertiarySystemFill
+			}
+		} else {
+			backgroundConfig.backgroundColor = .clear
+		}
+
+		if isPreview {
+			backgroundConfig.backgroundColor = traitCollection.userInterfaceStyle == .dark ? .secondarySystemBackground : .white
+		}
+		backgroundConfiguration = backgroundConfig
+
+		// Text goes white only on the accent background. On gray, labels keep their normal colors.
+		updateColors(active: showsAccentSelection)
+		updateIndicatorView(active: showsAccentSelection)
+		updateFading(isSelected: state.isSelected)
+	}
+}
+
+// MARK: - Private
+
+private extension MainTimelineCell {
+
+	static func singleLineLabel() -> UILabel {
+		let label = NonIntrinsicLabel()
+		label.lineBreakMode = .byTruncatingTail
+		label.allowsDefaultTighteningForTruncation = false
+		label.adjustsFontForContentSizeCategory = true
+		return label
+	}
+
+	static func multiLineLabel() -> UILabel {
+		let label = NonIntrinsicLabel()
+		label.numberOfLines = 0
+		label.lineBreakMode = .byTruncatingTail
+		label.allowsDefaultTighteningForTruncation = false
+		label.adjustsFontForContentSizeCategory = true
+		return label
+	}
+
+	func commonInit() {
+		isAccessibilityElement = true
+		separatorLeadingConstraint.isActive = true
+		thumbnailView.contentMode = .scaleAspectFit
+		thumbnailView.clipsToBounds = true
+		thumbnailView.layer.cornerRadius = MainTimelineDefaultCellLayout.thumbnailCornerRadius
+		thumbnailView.backgroundColor = Assets.Colors.thumbnailPlaceholder
+		for view in [titleView, summaryView, dateView, feedNameView, iconView, indicatorView, thumbnailView] {
+			contentView.addSubview(view)
+			view.isAccessibilityElement = false
+		}
+		indicatorView.isHidden = true
+		thumbnailView.isHidden = true
+	}
+
+	func updatedLayout(width: CGFloat) -> MainTimelineCellLayout {
+		guard cellData != nil else {
+			return MainTimelineDefaultCellLayout(width: width, insets: .zero, cellData: MainTimelineCellData())
+		}
+		if traitCollection.preferredContentSizeCategory.isAccessibilityCategory {
+			return MainTimelineAccessibilityCellLayout(width: width, insets: .zero, cellData: cellData)
+		}
+		return MainTimelineDefaultCellLayout(width: width, insets: .zero, cellData: cellData)
+	}
+
+	/// Lays out again, since the thumbnail view is sized to the image. The placeholder color shows until there’s an image.
+	func setThumbnailImage(_ image: UIImage?) {
+		if thumbnailView.image !== image {
+			thumbnailView.image = image
+			thumbnailView.backgroundColor = image == nil ? Assets.Colors.thumbnailPlaceholder : nil
+			setNeedsLayout()
+		}
+	}
+
+	func setFrame(for label: UILabel, rect: CGRect) {
+		if Int(floor(rect.height)) == 0 || Int(floor(rect.width)) == 0 {
+			label.isHidden = true
+		} else {
+			label.isHidden = false
+			label.setFrameIfNotEqual(rect)
+		}
+	}
+
+	func updateSubviews() {
+		titleView.font = MainTimelineDefaultCellLayout.titleFont
+		titleView.attributedText = cellData.attributedTitle.applyingBaseFont(MainTimelineDefaultCellLayout.titleFont)
+
+		summaryView.font = MainTimelineDefaultCellLayout.summaryFont
+		summaryView.text = cellData.summary
+
+		dateView.font = MainTimelineDefaultCellLayout.dateFont
+		dateView.text = cellData.dateString
+
+		switch cellData.showFeedName {
+		case .feed:
+			feedNameView.font = MainTimelineDefaultCellLayout.feedNameFont
+			feedNameView.text = cellData.feedName
+			feedNameView.isHidden = false
+		case .byline:
+			feedNameView.font = MainTimelineDefaultCellLayout.feedNameFont
+			feedNameView.text = cellData.byline
+			feedNameView.isHidden = false
+		case .none:
+			feedNameView.isHidden = true
+		}
+
+		if cellData.showIcon, let iconImage = cellData.iconImage {
+			iconView.iconImage = iconImage
+			iconView.isHidden = false
+		} else {
+			iconView.iconImage = nil
+			iconView.isHidden = true
+		}
+
+		if cellData.showThumbnail {
+			setThumbnailImage(cellData.thumbnail)
+			thumbnailView.isHidden = false
+		} else {
+			setThumbnailImage(nil)
+			thumbnailView.isHidden = true
+		}
+
+		let active = isActiveSelection(configurationState)
+		updateColors(active: active)
+		updateIndicatorView(active: active)
+		updateFading(isSelected: configurationState.isSelected)
+		updateAccessibilityLabel()
+		setNeedsLayout()
+	}
+
+	/// Matches the feeds list: accent background (and white text) when the timeline is first responder, gray otherwise.
+	func isActiveSelection(_ state: UICellConfigurationState) -> Bool {
+		state.isSelected && isInExpandedSplitView && enclosingViewController?.isFirstResponder == true
+	}
+
+	func updateColors(active: Bool) {
+		titleView.textColor = active ? .white : .label
+		summaryView.textColor = active ? .white : (cellData.title.isEmpty ? .label : .secondaryLabel)
+		dateView.textColor = active ? .white : .secondaryLabel
+		feedNameView.textColor = active ? .white : .secondaryLabel
+	}
+
+	func updateIndicatorView(active: Bool) {
+		guard cellData != nil else {
+			indicatorView.isHidden = true
+			return
+		}
+		if cellData.starred {
+			indicatorView.iconImage = Assets.Images.starredFeed
+			indicatorView.tintColor = active ? .white : Assets.Colors.star
+			indicatorView.isHidden = false
+		} else if !cellData.read {
+			indicatorView.iconImage = Assets.Images.unreadCellIndicator
+			indicatorView.tintColor = active ? .white : Assets.Colors.secondaryAccent
+			indicatorView.isHidden = false
+		} else {
+			indicatorView.isHidden = true
+		}
+	}
+
+	/// Fades the content view, not the background, so the selection highlight stays full strength.
+	/// The selected row never fades, since selecting an article marks it read.
+	func updateFading(isSelected: Bool) {
+		var alpha: CGFloat = 1.0
+		if let cellData, cellData.fadesReadArticles, cellData.read, !isSelected {
+			alpha = Self.readArticleAlpha
+		}
+		if contentView.alpha != alpha {
+			contentView.alpha = alpha
+		}
+	}
+
+	func updateAccessibilityLabel() {
+		let starredStatus = cellData.starred ? "\(NSLocalizedString("Starred", comment: "Starred")), " : ""
+		let unreadStatus = cellData.read ? "" : "\(NSLocalizedString("Unread", comment: "Unread")), "
+		accessibilityLabel = starredStatus + unreadStatus + "\(cellData.feedName), \(cellData.title), \(cellData.summary), \(cellData.dateString)"
+	}
+}

@@ -9,16 +9,23 @@
 import UIKit
 
 final class ImageViewController: UIViewController {
-	@IBOutlet var closeButton: UIButton!
-	@IBOutlet var shareButton: UIButton!
 	@IBOutlet var imageScrollView: ImageScrollView!
 	@IBOutlet var titleLabel: UILabel!
 	@IBOutlet var titleBackground: UIVisualEffectView!
 	@IBOutlet var titleLeading: NSLayoutConstraint!
-	@IBOutlet var titleTrailing: NSLayoutConstraint!
+
+	private var shareButtonItem: UIBarButtonItem?
+
+	// Title margins as a fraction of the view width.
+	private static let regularWidthTitleMarginMultiplier: CGFloat = 0.1
+	private static let compactWidthTitleMarginMultiplier: CGFloat = 0.04
 
 	var image: UIImage!
 	var imageTitle: String?
+
+	// Strong reference — the navigation controller’s transitioningDelegate is weak,
+	// and the transition must outlive the WebViewController that configured it.
+	var transition: ImageTransition?
 	var zoomedFrame: CGRect {
 		return imageScrollView.zoomedFrame
 	}
@@ -36,18 +43,25 @@ final class ImageViewController: UIViewController {
 	override func viewDidLoad() {
         super.viewDidLoad()
 
-		closeButton.imageView?.contentMode = .scaleAspectFit
-		closeButton.accessibilityLabel = NSLocalizedString("Close", comment: "Close")
-		shareButton.accessibilityLabel = NSLocalizedString("Share", comment: "Share")
+		let closeButtonItem = UIBarButtonItem(barButtonSystemItem: .close, target: self, action: #selector(done(_:)))
+		closeButtonItem.tintColor = Assets.Colors.primaryAccent
+		let shareButtonItem = UIBarButtonItem(barButtonSystemItem: .action, target: self, action: #selector(share(_:)))
+		shareButtonItem.tintColor = Assets.Colors.primaryAccent
+		navigationItem.leftBarButtonItem = closeButtonItem
+		navigationItem.rightBarButtonItem = shareButtonItem
+		self.shareButtonItem = shareButtonItem
 
         imageScrollView.setup()
+        // The image viewer is full-screen, so the scroll view ignores
+        // the navigation bar and safe area insets. Otherwise the image is pushed down
+        // and doesn’t match the zoom transition’s target frame.
+        imageScrollView.contentInsetAdjustmentBehavior = .never
         imageScrollView.imageScrollViewDelegate = self
         imageScrollView.imageContentMode = .aspectFit
         imageScrollView.initialOffset = .center
 		imageScrollView.display(image: image)
 
 		titleLabel.text = imageTitle ?? ""
-		layoutTitleLabel()
 
 		guard imageTitle != "" else {
 			titleBackground.removeFromSuperview()
@@ -56,18 +70,17 @@ final class ImageViewController: UIViewController {
 		titleBackground.layer.cornerRadius = 6
     }
 
-	override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
-		super.viewWillTransition(to: size, with: coordinator)
-		coordinator.animate(alongsideTransition: { [weak self] _ in
-			self?.imageScrollView.resize()
-		})
+	override func viewWillLayoutSubviews() {
+		super.viewWillLayoutSubviews()
+		layoutTitleLabel()
 	}
 
 	@IBAction func share(_ sender: Any) {
-		guard let image = image else { return }
+		guard let image else {
+			return
+		}
 		let activityViewController = UIActivityViewController(activityItems: [image], applicationActivities: nil)
-		activityViewController.popoverPresentationController?.sourceView = shareButton
-		activityViewController.popoverPresentationController?.sourceRect = shareButton.bounds
+		activityViewController.popoverPresentationController?.barButtonItem = shareButtonItem
 		present(activityViewController, animated: true)
 	}
 
@@ -76,11 +89,8 @@ final class ImageViewController: UIViewController {
 	}
 
 	private func layoutTitleLabel() {
-		let width = view.frame.width
-		let multiplier = traitCollection.userInterfaceIdiom == .pad ? CGFloat(0.1) : CGFloat(0.04)
-		titleLeading.constant += width * multiplier
-		titleTrailing.constant -= width * multiplier
-		titleLabel.layoutIfNeeded()
+		let multiplier = traitCollection.horizontalSizeClass == .regular ? Self.regularWidthTitleMarginMultiplier : Self.compactWidthTitleMarginMultiplier
+		titleLeading.constant = view.bounds.width * multiplier
 	}
 }
 

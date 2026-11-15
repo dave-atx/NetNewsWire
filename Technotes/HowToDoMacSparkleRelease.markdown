@@ -1,7 +1,9 @@
 # How To Do Mac Sparkle Release
 
 NetNewsWire_mac_target_common.xcconfig
-	update MARKETING_VERSION and CURRENT_PROJECT_VERSION
+	update MARKETING_VERSION
+NetNewsWire_version.xcconfig
+	 update CURRENT_PROJECT_VERSION if needed (might have just been done for iOS)
 
 Run buildscripts/quiet_build_and_test.sh
 
@@ -37,6 +39,13 @@ Find tag in GitHub - https://github.com/Ranchero-Software/NetNewsWire/tags
 Turn into release — NetNewsWire 6.1.5b4 for Mac
 Add change notes
 Zip app - NetNewsWire6.1.5b4.zip
+
+## Start with 7.2 beta
+Sign the zip with the EdDSA key (key is in the login Keychain):
+sign_update NetNewsWire6.1.5b4.zip
+(sign_update is in Sparkle’s bin folder — in the release distribution download, or in DerivedData under SourcePackages/artifacts/sparkle/Sparkle/bin)
+Copy the output — it has both sparkle:edSignature and length for the appcast enclosure
+
 Upload binary to release
 Publish release
 Copy file to releases archive — /Volumes/KD/Archive/Releases/
@@ -47,7 +56,7 @@ Update Appcast on main branch
 	Update pubDate
 	Update enclosure URL
 	Update version
-	Update file size - length
+	Update sparkle:edSignature and length — from the sign_update output
 
 Run xmllint on appcast
 xmllint --noout ~/Projects/nnw/main/Appcasts/netnewswire-beta.xml

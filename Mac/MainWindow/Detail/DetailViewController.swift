@@ -20,10 +20,25 @@ enum DetailState: Equatable {
 	case extracted(Article, ExtractedArticle, CGFloat?)
 }
 
+@MainActor protocol DetailViewControllerDelegate: AnyObject {
+	func detailViewController(_ detailViewController: DetailViewController, mouseoverLinkDidChange link: String?)
+}
+
 final class DetailViewController: NSViewController, WKUIDelegate {
 
 	@IBOutlet var containerView: DetailContainerView!
-	@IBOutlet var statusBarView: DetailStatusBarView!
+	@IBOutlet var linkOverlayView: DetailLinkOverlayView!
+
+	weak var delegate: DetailViewControllerDelegate?
+
+	/// Whether the hovered link shows in the floating overlay. The delegate gets the hovered link either way.
+	var showsMouseoverLinkOverlay = true {
+		didSet {
+			if showsMouseoverLinkOverlay != oldValue {
+				updateMouseoverLinkOverlay()
+			}
+		}
+	}
 
 	private lazy var regularWebViewController = createWebViewController()
 	private var searchWebViewController: DetailWebViewController?
@@ -38,9 +53,19 @@ final class DetailViewController: NSViewController, WKUIDelegate {
 			if containerView.contentView === webview {
 				return
 			}
-			statusBarView.mouseoverLink = nil
+			mouseoverLink = nil
 			containerView.contentView = webview
 			resetTextFinder()
+		}
+	}
+
+	private var mouseoverLink: String? {
+		didSet {
+			guard mouseoverLink != oldValue else {
+				return
+			}
+			updateMouseoverLinkOverlay()
+			delegate?.detailViewController(self, mouseoverLinkDidChange: mouseoverLink)
 		}
 	}
 
@@ -62,15 +87,13 @@ final class DetailViewController: NSViewController, WKUIDelegate {
 		}
 	}
 
-	private var isArticleContentJavascriptEnabled = AppDefaults.shared.isArticleContentJavascriptEnabled
+	convenience init() {
+		self.init(nibName: "DetailView", bundle: nil)
+	}
 
 	override func viewDidLoad() {
 		currentWebViewController = regularWebViewController
-		NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
-			Task { @MainActor in
-				self?.userDefaultsDidChange()
-			}
-		}
+		updateMouseoverLinkOverlay()
 	}
 
 	// MARK: - API
@@ -92,6 +115,10 @@ final class DetailViewController: NSViewController, WKUIDelegate {
 
 	func stopMediaPlayback() {
 		currentWebViewController.stopMediaPlayback()
+	}
+
+	func fetchSelectedHTML(_ completion: @escaping (String?) -> Void) {
+		currentWebViewController.fetchSelectedHTML(completion)
 	}
 
 	func canScrollDown() async -> Bool {
@@ -117,12 +144,6 @@ final class DetailViewController: NSViewController, WKUIDelegate {
 			return
 		}
 		window.makeFirstResponderUnlessDescendantIsFirstResponder(currentWebViewController.webView)
-	}
-	
-	// MARK: State Restoration
-	
-	func saveState(to state: inout [AnyHashable : Any]) {
-		currentWebViewController.saveState(to: &state)
 	}
 
 	// MARK: Find in Article
@@ -164,20 +185,27 @@ extension DetailViewController: DetailWebViewControllerDelegate {
 		guard !link.isEmpty, detailWebViewController === currentWebViewController else {
 			return
 		}
-		statusBarView.mouseoverLink = link
+		mouseoverLink = link
 	}
 
 	func mouseDidExit(_ detailWebViewController: DetailWebViewController) {
 		guard detailWebViewController === currentWebViewController else {
 			return
 		}
-		statusBarView.mouseoverLink = nil
+		mouseoverLink = nil
 	}
 }
 
 // MARK: - Private
 
 private extension DetailViewController {
+
+	func updateMouseoverLinkOverlay() {
+		guard isViewLoaded else {
+			return
+		}
+		linkOverlayView.mouseoverLink = showsMouseoverLinkOverlay ? mouseoverLink : nil
+	}
 
 	func createWebViewController() -> DetailWebViewController {
 		let controller = DetailWebViewController()
@@ -195,28 +223,6 @@ private extension DetailViewController {
 				searchWebViewController = createWebViewController()
 			}
 			return searchWebViewController!
-		}
-	}
-
-	func userDefaultsDidChange() {
-		if AppDefaults.shared.isArticleContentJavascriptEnabled != isArticleContentJavascriptEnabled {
-			isArticleContentJavascriptEnabled = AppDefaults.shared.isArticleContentJavascriptEnabled
-			createNewWebViewsAndRestoreState()
-		}
-	}
-
-	func createNewWebViewsAndRestoreState() {
-
-		regularWebViewController = createWebViewController()
-		currentWebViewController = regularWebViewController
-		regularWebViewController.state = detailStateForRegular
-
-		searchWebViewController = nil
-
-		if currentSourceMode == .search {
-			searchWebViewController = createWebViewController()
-			currentWebViewController = searchWebViewController
-			searchWebViewController!.state = detailStateForSearch
 		}
 	}
 }

@@ -12,15 +12,18 @@ import RSCore
 import RSWeb
 import Articles
 import ArticlesDatabase
-import RSDatabase
+import ErrorLog
+import ActivityLog
 
 @MainActor public final class AccountManager: UnreadCountProvider {
+
 	public static var shared = AccountManager()
 
 	public static let netNewsWireNewsURL = "https://netnewswire.blog/feed.xml"
     private static let jsonNetNewsWireNewsURL = "https://netnewswire.blog/feed.json"
 
 	public let defaultAccount: Account
+	public let errorLogDatabase: ErrorLogDatabase
 
 	private let accountsFolder: String
     private var accountsDictionary = [String: Account]()
@@ -28,9 +31,28 @@ import RSDatabase
 	private let defaultAccountFolderName = "OnMyMac"
 	private let defaultAccountIdentifier = "OnMyMac"
 
+	private var lastStatusRepairDate: Date?
+	private static let statusRepairInterval: TimeInterval = 1 * 60 * 60
+
 	public var isSuspended = false
 
-	private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "AccountManager")
+	nonisolated static let syncArticleContentForUnreadArticlesKey = "iCloudSyncArticleContentForUnreadArticles"
+
+	public var syncArticleContentForUnreadArticles: Bool {
+		get {
+			assert(Thread.isMainThread)
+			return UserDefaults.standard.bool(forKey: Self.syncArticleContentForUnreadArticlesKey)
+		}
+		set {
+			assert(Thread.isMainThread)
+			UserDefaults.standard.set(newValue, forKey: Self.syncArticleContentForUnreadArticlesKey)
+			if Platform.deviceHasiCloudAccount {
+				NSUbiquitousKeyValueStore.default.set(newValue, forKey: Self.syncArticleContentForUnreadArticlesKey)
+			}
+		}
+	}
+
+	private static let logger = Logger(subsystem: Logger.nnwSubsystem, category: "AccountManager")
 
 	public var areUnreadCountsInitialized: Bool {
 		for account in activeAccounts {
@@ -57,13 +79,12 @@ import RSDatabase
 		sortByName(accounts)
 	}
 
+	public var iCloudAccount: Account? {
+		accounts.first(where: { $0.type == .cloudKit })
+	}
+
 	public var hasiCloudAccount: Bool {
-		for account in accounts {
-			if account.type == .cloudKit {
-				return true
-			}
-		}
-		return false
+		iCloudAccount != nil
 	}
 
 	public var activeAccounts: [Account] {
@@ -71,20 +92,31 @@ import RSDatabase
 		return Array(accountsDictionary.values.filter { $0.isActive })
 	}
 
+	/// Repair article statuses in all active accounts, at most once per interval.
+	public func repairStatusesIfNeeded() {
+		if let lastStatusRepairDate, Date().timeIntervalSince(lastStatusRepairDate) < Self.statusRepairInterval {
+			return
+		}
+		lastStatusRepairDate = Date()
+		for account in activeAccounts {
+			account.repairStatuses()
+		}
+	}
+
 	public var sortedActiveAccounts: [Account] {
 		sortByName(activeAccounts)
 	}
 
-	public var lastArticleFetchEndTime: Date? {
-		var lastArticleFetchEndTime: Date?
+	public var lastRefreshCompletedDate: Date? {
+		var lastRefreshCompletedDate: Date?
 		for account in activeAccounts {
-			if let accountLastArticleFetchEndTime = account.metadata.lastArticleFetchEndTime {
-				if lastArticleFetchEndTime == nil || lastArticleFetchEndTime! < accountLastArticleFetchEndTime {
-					lastArticleFetchEndTime = accountLastArticleFetchEndTime
+			if let accountLastArticleFetchEndTime = account.lastRefreshCompletedDate {
+				if lastRefreshCompletedDate == nil || lastRefreshCompletedDate! < accountLastArticleFetchEndTime {
+					lastRefreshCompletedDate = accountLastArticleFetchEndTime
 				}
 			}
 		}
-		return lastArticleFetchEndTime
+		return lastRefreshCompletedDate
 	}
 
 	public func existingActiveAccount(forDisplayName displayName: String) -> Account? {
@@ -98,6 +130,10 @@ import RSDatabase
 			}
 		}
 		return false
+	}
+
+	public var canRefresh: Bool {
+		!refreshInProgress && !activeAccounts.isEmpty
 	}
 
 	private var isActive = false
@@ -114,10 +150,21 @@ import RSDatabase
 			abort()
 		}
 
+		let errorLogDatabasePath = AppConfig.dataFolder.appendingPathComponent("Errors.db").path
+		self.errorLogDatabase = ErrorLogDatabase(databasePath: errorLogDatabasePath)
+
 		defaultAccount = Account(dataFolder: localAccountFolder, type: .onMyMac, accountID: defaultAccountIdentifier)
         accountsDictionary[defaultAccount.accountID] = defaultAccount
 
 		readAccountsFromDisk()
+
+		NotificationCenter.default.addObserver(self, selector: #selector(handleUbiquitousKeyValueStoreDidChangeExternally(_:)), name: NSUbiquitousKeyValueStore.didChangeExternallyNotification, object: NSUbiquitousKeyValueStore.default)
+		if Platform.deviceHasiCloudAccount {
+			NSUbiquitousKeyValueStore.default.synchronize()
+		}
+
+		migrateSyncArticleContentForUnreadArticlesSetting(hasiCloudAccount: hasiCloudAccount)
+		seedSyncArticleContentForUnreadArticlesInUbiquitousKeyValueStore()
 	}
 
 	public func start() {
@@ -130,7 +177,8 @@ import RSDatabase
 		NotificationCenter.default.addObserver(self, selector: #selector(unreadCountDidInitialize(_:)), name: .UnreadCountDidInitialize, object: nil)
 		NotificationCenter.default.addObserver(self, selector: #selector(unreadCountDidChange(_:)), name: .UnreadCountDidChange, object: nil)
 		NotificationCenter.default.addObserver(self, selector: #selector(accountStateDidChange(_:)), name: .AccountStateDidChange, object: nil)
-
+		NotificationCenter.default.addObserver(self, selector: #selector(handleAppDidGoToBackground(_:)), name: .appDidGoToBackground, object: nil)
+		NotificationCenter.default.addObserver(self, selector: #selector(handleLowMemory(_:)), name: .lowMemory, object: nil)
 		DispatchQueue.main.async {
 			self.updateUnreadCount()
 		}
@@ -140,7 +188,7 @@ import RSDatabase
 
 	public func createAccount(type: AccountType) -> Account {
 		if type == .cloudKit {
-			if let existingiCloudAccount = accounts.first(where: { $0.type == .cloudKit }) {
+			if let existingiCloudAccount = iCloudAccount {
 				return existingiCloudAccount
 			}
 		}
@@ -171,6 +219,7 @@ import RSDatabase
 		}
 
 		account.prepareForDeletion()
+		account.deleteSettings()
 
 		accountsDictionary.removeValue(forKey: account.accountID)
 		account.isDeleted = true
@@ -190,12 +239,16 @@ import RSDatabase
 		NotificationCenter.default.post(name: .UserDidDeleteAccount, object: self, userInfo: userInfo)
 	}
 
-	public func duplicateServiceAccount(type: AccountType, username: String?) -> Bool {
+	public func duplicateServiceAccount(type: AccountType, username: String?, endpoint: URL? = nil) -> Bool {
 		guard type != .onMyMac else {
 			return false
 		}
 		for account in accounts {
 			if account.type == type && username == account.username {
+				// Self-hosted services can have the same username on different servers.
+				if let endpoint, let existingEndpoint = account.endpointURL, endpoint != existingEndpoint {
+					continue
+				}
 				return true
 			}
 		}
@@ -241,16 +294,10 @@ import RSDatabase
 		}
 	}
 
-	public func suspendDatabaseAll() {
-		for account in accounts {
-			account.suspendDatabase()
-		}
-	}
-
 	public func resumeAll() {
 		isSuspended = false
 		for account in accounts {
-			account.resumeDatabaseAndDelegate()
+			account.resumeDelegate()
 		}
 		for account in accounts {
 			account.resume()
@@ -258,10 +305,8 @@ import RSDatabase
 	}
 
 	public func receiveRemoteNotification(userInfo: [AnyHashable: Any]) async {
-		Task {
-			for account in activeAccounts {
-				await account.receiveRemoteNotification(userInfo: userInfo)
-			}
+		for account in activeAccounts {
+			await account.receiveRemoteNotification(userInfo: userInfo)
 		}
 	}
 
@@ -273,10 +318,13 @@ import RSDatabase
 		}
 	}
 
-	public func refreshAll(errorHandler: ErrorHandlerCallback? = nil) async {
+	/// Returns `true` if the refresh ran, `false` if it was skipped
+	/// due to no network connection.
+	@discardableResult
+	public func refreshAll(errorHandler: ErrorHandlerCallback? = nil) async -> Bool {
 		guard NetworkMonitor.shared.isConnected else {
 			Self.logger.info("AccountManager: skipping refreshAll — not connected to internet.")
-			return
+			return false
 		}
 
 		CombinedRefreshProgress.shared.start()
@@ -295,6 +343,8 @@ import RSDatabase
 				}
 			}
 		}
+
+		return true
 	}
 
 	public func sendArticleStatusAll() async {
@@ -313,19 +363,36 @@ import RSDatabase
 		}
 	}
 
-	public func syncArticleStatusAll() async {
-		await withTaskGroup(of: Void.self, isolation: MainActor.shared) { group in
+	/// Returns `true` if any account reported meaningful work this round;
+	/// `false` only if every account was idle.
+	@discardableResult
+	public func syncArticleStatusAll() async -> Bool {
+		await withTaskGroup(of: Bool.self, isolation: MainActor.shared) { group in
 			for account in activeAccounts {
 				group.addTask {
-					try? await account.syncArticleStatus()
+					(try? await account.syncArticleStatus()) ?? false
 				}
 			}
+
+			var anyWork = false
+			for await didWork in group {
+				if didWork {
+					anyWork = true
+				}
+			}
+			return anyWork
 		}
 	}
 
 	public func saveAll() {
 		for account in accounts {
 			account.save()
+		}
+	}
+
+	public func saveAllIfNeeded() {
+		for account in accounts {
+			account.saveIfNeeded()
 		}
 	}
 
@@ -356,17 +423,17 @@ import RSDatabase
 
 	// These fetch articles from active accounts and return a merged Set<Article>.
 
-	public func fetchArticles(_ fetchType: FetchType) throws -> Set<Article> {
+	public func fetchArticles(_ fetchType: FetchType) -> Set<Article> {
 		precondition(Thread.isMainThread)
 
 		var articles = Set<Article>()
 		for account in activeAccounts {
-			articles.formUnion(try account.fetchArticles(fetchType))
+			articles.formUnion(account.fetchArticles(fetchType))
 		}
 		return articles
 	}
 
-	public func fetchArticlesAsync(_ fetchType: FetchType) async throws -> Set<Article> {
+	public func fetchArticlesAsync(_ fetchType: FetchType) async -> Set<Article> {
 		precondition(Thread.isMainThread)
 
 		guard activeAccounts.count > 0 else {
@@ -375,7 +442,7 @@ import RSDatabase
 
 		var allFetchedArticles = Set<Article>()
 		for account in activeAccounts {
-			let articles = try await account.fetchArticlesAsync(fetchType)
+			let articles = await account.fetchArticlesAsync(fetchType)
 			allFetchedArticles.formUnion(articles)
 		}
 
@@ -390,23 +457,54 @@ import RSDatabase
 			return nil
 		}
 
-		do {
-			let articles = try account.fetchArticles(.articleIDs(Set([articleID])))
-			return articles.first
-		} catch {
-			return nil
-		}
+		let articles = account.fetchArticles(.articleIDs(Set([articleID])))
+		return articles.first
 	}
 
 	// MARK: - Fetching Article Counts
 
-	public func fetchCountForStarredArticles() throws -> Int {
+	public func fetchCountForStarredArticles() -> Int {
 		precondition(Thread.isMainThread)
 		var count = 0
 		for account in activeAccounts {
-			count += try account.fetchCountForStarredArticles()
+			count += account.fetchCountForStarredArticles()
 		}
 		return count
+	}
+
+	public func fetchCountForStarredArticlesAsync() async -> Int {
+		precondition(Thread.isMainThread)
+		var count = 0
+		for account in activeAccounts {
+			count += await account.fetchCountForStarredArticlesAsync()
+		}
+		return count
+	}
+
+	public func fetchCountForTodayArticlesAsync() async -> Int {
+		precondition(Thread.isMainThread)
+		var count = 0
+		for account in activeAccounts {
+			count += await account.fetchCountForTodayArticlesAsync()
+		}
+		return count
+	}
+
+	public func fetchUnreadCountForTodayAsync() async -> Int {
+		precondition(Thread.isMainThread)
+		var count = 0
+		for account in activeAccounts {
+			count += await account.fetchUnreadCountForTodayAsync()
+		}
+		return count
+	}
+
+	// MARK: - Vacuum
+
+	public func vacuumAccountDatabases() async {
+		for account in accounts {
+			await account.vacuumDatabases()
+		}
 	}
 
 	// MARK: - Caches
@@ -439,11 +537,89 @@ import RSDatabase
 	@objc func accountStateDidChange(_ notification: Notification) {
 		updateUnreadCount()
 	}
+
+	@objc func handleLowMemory(_ notification: Notification) {
+		emptyCaches()
+	}
+
+	@objc func handleAppDidGoToBackground(_ notification: Notification) {
+		emptyCaches()
+	}
 }
 
 // MARK: - Private
 
 private extension AccountManager {
+
+	@objc nonisolated func handleUbiquitousKeyValueStoreDidChangeExternally(_ note: Notification) {
+		guard !Platform.isRunningUnitTests else {
+			return
+		}
+
+		// Extract only Sendable primitives before hopping to the MainActor.
+		let changeReason = note.userInfo?[NSUbiquitousKeyValueStoreChangeReasonKey] as? Int
+		let changedKeys = note.userInfo?[NSUbiquitousKeyValueStoreChangedKeysKey] as? [String]
+
+		Task { @MainActor in
+			assert(Thread.isMainThread)
+			guard let changeReason, changeReason == NSUbiquitousKeyValueStoreServerChange || changeReason == NSUbiquitousKeyValueStoreInitialSyncChange else {
+				return
+			}
+
+			guard let changedKeys, changedKeys.contains(Self.syncArticleContentForUnreadArticlesKey) else {
+				return
+			}
+
+			// Only apply if the store actually has a value for the key.
+			guard NSUbiquitousKeyValueStore.default.object(forKey: Self.syncArticleContentForUnreadArticlesKey) != nil else {
+				return
+			}
+
+			let newValue = NSUbiquitousKeyValueStore.default.bool(forKey: Self.syncArticleContentForUnreadArticlesKey)
+			UserDefaults.standard.set(newValue, forKey: Self.syncArticleContentForUnreadArticlesKey)
+		}
+	}
+
+	func migrateSyncArticleContentForUnreadArticlesSetting(hasiCloudAccount: Bool) {
+		assert(Thread.isMainThread)
+		// syncArticleContentForUnreadArticles should be set to false unless
+		// the user already has an iCloud account.
+		guard UserDefaults.standard.object(forKey: Self.syncArticleContentForUnreadArticlesKey) == nil else {
+			return
+		}
+
+		guard !Platform.isRunningUnitTests else {
+			return
+		}
+
+		guard Platform.deviceHasiCloudAccount else {
+			syncArticleContentForUnreadArticles = false
+			return
+		}
+
+		// Check if another device already set a value via iCloud key-value store.
+		if NSUbiquitousKeyValueStore.default.object(forKey: Self.syncArticleContentForUnreadArticlesKey) != nil {
+			let iCloudValue = NSUbiquitousKeyValueStore.default.bool(forKey: Self.syncArticleContentForUnreadArticlesKey)
+			UserDefaults.standard.set(iCloudValue, forKey: Self.syncArticleContentForUnreadArticlesKey)
+			return
+		}
+
+		syncArticleContentForUnreadArticles = hasiCloudAccount
+	}
+
+	func seedSyncArticleContentForUnreadArticlesInUbiquitousKeyValueStore() {
+		assert(Thread.isMainThread)
+		guard !Platform.isRunningUnitTests else {
+			return
+		}
+		guard Platform.deviceHasiCloudAccount else {
+			return
+		}
+		guard NSUbiquitousKeyValueStore.default.object(forKey: Self.syncArticleContentForUnreadArticlesKey) == nil else {
+			return
+		}
+		NSUbiquitousKeyValueStore.default.set(syncArticleContentForUnreadArticles, forKey: Self.syncArticleContentForUnreadArticlesKey)
+	}
 
 	func updateUnreadCount() {
 		unreadCount = calculateUnreadCount(activeAccounts)
@@ -488,7 +664,7 @@ private extension AccountManager {
 	}
 
 	func duplicateServiceAccount(_ account: Account) -> Bool {
-		duplicateServiceAccount(type: account.type, username: account.username)
+		duplicateServiceAccount(type: account.type, username: account.username, endpoint: account.endpointURL)
 	}
 
 	func sortByName(_ accounts: [Account]) -> [Account] {

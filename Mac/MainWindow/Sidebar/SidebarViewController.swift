@@ -11,6 +11,7 @@ import RSTree
 import Articles
 import Account
 import RSCore
+import Images
 
 extension Notification.Name {
 	static let appleSideBarDefaultIconSizeChanged = Notification.Name("AppleSideBarDefaultIconSizeChanged")
@@ -24,9 +25,17 @@ extension Notification.Name {
 
 @objc final class SidebarViewController: NSViewController, NSOutlineViewDelegate, NSMenuDelegate, UndoableCommandRunner {
 
-	@IBOutlet var outlineView: NSOutlineView!
+	@IBOutlet var outlineView: SidebarOutlineView!
+	@IBOutlet var progressView: SidebarProgressView?
 
 	weak var delegate: SidebarDelegate?
+
+	/// False when the main window status bar takes over refresh progress.
+	var showsProgressView = true {
+		didSet {
+			progressView?.isSuppressed = !showsProgressView
+		}
+	}
 
 	weak var splitViewItem: NSSplitViewItem?
 
@@ -64,11 +73,29 @@ extension Notification.Name {
 		return selectedNodes.representedObjects()
 	}
 
+	var selectedContainer: Container? {
+		for node in selectedNodes {
+			if let container = containerForNode(node) {
+				return container
+			}
+		}
+		return nil
+	}
+
 	private static let rowViewIdentifier = NSUserInterfaceItemIdentifier(rawValue: "sidebarRow")
+	private static let extraLargeRowHeight: CGFloat = 36
+	private static let extraExtraLargeRowHeight: CGFloat = 42
+	private let keyboardDelegate = SidebarKeyboardDelegate()
 
 	// MARK: - NSViewController
 
+	convenience init() {
+		self.init(nibName: "SidebarView", bundle: nil)
+	}
+
 	override func viewDidLoad() {
+		progressView?.isSuppressed = !showsProgressView
+		outlineView.keyboardDelegate = keyboardDelegate
 		outlineView.dataSource = dataSource
 		outlineView.doubleAction = #selector(doubleClickedSidebar(_:))
 		outlineView.setDraggingSourceOperationMask([.move, .copy], forLocal: true)
@@ -76,18 +103,28 @@ extension Notification.Name {
 
 		NotificationCenter.default.addObserver(self, selector: #selector(unreadCountDidInitialize(_:)), name: .UnreadCountDidInitialize, object: nil)
 		NotificationCenter.default.addObserver(self, selector: #selector(unreadCountDidChange(_:)), name: .UnreadCountDidChange, object: nil)
+		NotificationCenter.default.addObserver(self, selector: #selector(handleUnreadCountDisplaySettingDidChange(_:)), name: .unreadCountDisplaySettingDidChange, object: nil)
+		NotificationCenter.default.addObserver(self, selector: #selector(handleSidebarShowsIconsDidChange(_:)), name: .sidebarShowsIconsDidChange, object: nil)
+		NotificationCenter.default.addObserver(self, selector: #selector(handleSidebarTextSizeDidChange(_:)), name: .sidebarTextSizeDidChange, object: nil)
+		NotificationCenter.default.addObserver(self, selector: #selector(handleSidebarSmartFeedsVisibilityDidChange(_:)), name: .sidebarSmartFeedsVisibilityDidChange, object: nil)
 		NotificationCenter.default.addObserver(self, selector: #selector(containerChildrenDidChange(_:)), name: .ChildrenDidChange, object: nil)
 		NotificationCenter.default.addObserver(self, selector: #selector(accountsDidChange(_:)), name: .UserDidAddAccount, object: nil)
 		NotificationCenter.default.addObserver(self, selector: #selector(accountsDidChange(_:)), name: .UserDidDeleteAccount, object: nil)
 		NotificationCenter.default.addObserver(self, selector: #selector(accountStateDidChange(_:)), name: .AccountStateDidChange, object: nil)
 		NotificationCenter.default.addObserver(self, selector: #selector(userDidAddFeed(_:)), name: .UserDidAddFeed, object: nil)
 		NotificationCenter.default.addObserver(self, selector: #selector(batchUpdateDidPerform(_:)), name: .BatchUpdateDidPerform, object: nil)
-		NotificationCenter.default.addObserver(self, selector: #selector(faviconDidBecomeAvailable(_:)), name: .FaviconDidBecomeAvailable, object: nil)
-		NotificationCenter.default.addObserver(self, selector: #selector(feedIconDidBecomeAvailable(_:)), name: .feedIconDidBecomeAvailable, object: nil)
+		NotificationCenter.default.addObserver(self, selector: #selector(handleFeedIconImageDidChange(_:)), name: .feedIconImageDidChange, object: nil)
+		NotificationCenter.default.addObserver(self, selector: #selector(handleGrayscaleIconsDidChange(_:)), name: .grayscaleIconsDidChange, object: nil)
 		NotificationCenter.default.addObserver(self, selector: #selector(feedSettingDidChange(_:)), name: .feedSettingDidChange, object: nil)
 		NotificationCenter.default.addObserver(self, selector: #selector(displayNameDidChange(_:)), name: .DisplayNameDidChange, object: nil)
 		DistributedNotificationCenter.default().addObserver(self, selector: #selector(appleSideBarDefaultIconSizeChanged(_:)), name: .appleSideBarDefaultIconSizeChanged, object: nil)
 
+		if let clipView = outlineView.enclosingScrollView?.contentView {
+			clipView.postsFrameChangedNotifications = true
+			NotificationCenter.default.addObserver(self, selector: #selector(handleClipViewFrameDidChange(_:)), name: NSView.frameDidChangeNotification, object: clipView)
+		}
+
+		updateRowSizeStyle()
 		outlineView.reloadData()
 
 		// Expand top level items by default.  If there is state to restore, overlay this.
@@ -97,7 +134,7 @@ extension Notification.Name {
 			}
 		}
 		expandNodes()
-
+		prefetchFeedIcons()
 	}
 
 	// MARK: State Restoration
@@ -209,6 +246,37 @@ extension Notification.Name {
 		}
 	}
 
+	@objc func handleUnreadCountDisplaySettingDidChange(_ notification: Notification) {
+		applyToAvailableCells { cell, _ in
+			cell.updateUnreadCountView()
+		}
+	}
+
+	@objc func handleSidebarShowsIconsDidChange(_ notification: Notification) {
+		prefetchFeedIcons()
+		applyToAvailableCells(configure)
+	}
+
+	@objc func handleGrayscaleIconsDidChange(_ notification: Notification) {
+		applyToAvailableCells(configure)
+	}
+
+	@objc func handleSidebarSmartFeedsVisibilityDidChange(_ notification: Notification) {
+		rebuildTreeAndRestoreSelection()
+		expandNodes()
+	}
+
+	@objc func handleSidebarTextSizeDidChange(_ notification: Notification) {
+		updateRowSizeStyle()
+		let savedSelection = selectedNodes
+		outlineView.reloadData()
+		restoreSelection(to: savedSelection, sendNotificationIfChanged: true)
+	}
+
+	@objc func handleClipViewFrameDidChange(_ notification: Notification) {
+		fitOutlineViewToVisibleWidth()
+	}
+
 	@objc func containerChildrenDidChange(_ note: Notification) {
 		rebuildTreeAndRestoreSelection()
 	}
@@ -232,20 +300,18 @@ extension Notification.Name {
 		revealAndSelectRepresentedObject(feed as AnyObject)
 	}
 
-	@objc func faviconDidBecomeAvailable(_ note: Notification) {
-		applyToAvailableCells(configureFavicon)
-	}
-
-	@objc func feedIconDidBecomeAvailable(_ note: Notification) {
-		guard let feed = note.userInfo?[UserInfoKey.feed] as? Feed else { return }
+	@objc func handleFeedIconImageDidChange(_ notification: Notification) {
+		guard let feed = notification.userInfo?[UserInfoKey.feed] as? Feed else {
+			return
+		}
 		configureCellsForRepresentedObject(feed)
 	}
 
 	@objc func feedSettingDidChange(_ note: Notification) {
-		guard let feed = note.object as? Feed, let key = note.userInfo?[Feed.SettingUserInfoKey] as? String else {
+		guard let feed = note.object as? Feed, let key = note.userInfo?[Feed.SettingUserInfoKey] as? Feed.SettingKey else {
 			return
 		}
-		if key == Feed.SettingKey.homePageURL || key == Feed.SettingKey.faviconURL {
+		if key == .homePageURL || key == .faviconURL {
 			configureCellsForRepresentedObject(feed)
 		}
 	}
@@ -261,6 +327,9 @@ extension Notification.Name {
 	}
 
 	@objc func appleSideBarDefaultIconSizeChanged(_ note: Notification) {
+		guard AppDefaults.sidebarTextSize == .system else {
+			return
+		}
 		// The outline view doesn't have the new row style size set yet when we get
 		// this notification, so give it half a second to catch up.
 		DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
@@ -274,31 +343,14 @@ extension Notification.Name {
 
 	@IBAction func delete(_ sender: AnyObject?) {
 		let availableSelectedNodes = selectedNodes.filter { !($0.representedObject is PseudoFeed) }
-
-		if availableSelectedNodes.isEmpty {
-			return
-		}
-
-		let alert = SidebarDeleteItemsAlert.build(availableSelectedNodes)
-
-		alert.beginSheetModal(for: view.window!) { [weak self] result in
-			if result == NSApplication.ModalResponse.alertFirstButtonReturn {
-				guard let self = self else { return }
-
-				let firstRow = self.outlineView.selectedRowIndexes.min()
-				self.deleteNodes(availableSelectedNodes)
-				if let restoreRow = firstRow, restoreRow < self.outlineView.numberOfRows {
-					self.outlineView.selectRow(restoreRow)
-				}
-			}
-		}
+		confirmAndDeleteNodes(availableSelectedNodes)
 	}
 
 	@IBAction func doubleClickedSidebar(_ sender: Any?) {
 		guard outlineView.clickedRow == outlineView.selectedRow else {
 			return
 		}
-		if AppDefaults.shared.feedDoubleClickMarkAsRead, let articles = try? singleSelectedFeed?.fetchUnreadArticles() {
+		if AppDefaults.feedDoubleClickMarkAsRead, let articles = singleSelectedFeed?.fetchUnreadArticles() {
 			if let undoManager = undoManager, let markReadCommand = MarkStatusCommand(initialArticles: Array(articles), markingRead: true, undoManager: undoManager) {
 				runCommand(markReadCommand)
 			}
@@ -452,6 +504,13 @@ extension Notification.Name {
 			expandedTable.insert(containerID)
 			delegate?.sidebarInvalidatedRestorationState(self)
 		}
+
+		guard AppDefaults.sidebarShowsIcons else {
+			return
+		}
+		var feeds = [Feed]()
+		collectExpandedFeeds(in: node, into: &feeds)
+		IconImageCache.shared.prefetchImagesForFeeds(feeds)
  	}
 
 	func outlineViewItemDidCollapse(_ notification: Notification) {
@@ -470,22 +529,98 @@ extension Notification.Name {
 	func deleteNodes(_ nodes: [Node]) {
 		let nodesToDelete = treeController.normalizedSelectedNodes(nodes)
 
-		guard let undoManager = undoManager, let deleteCommand = DeleteCommand(nodesToDelete: nodesToDelete, treeController: treeController, undoManager: undoManager, errorHandler: ErrorHandler.present) else {
+		guard let undoManager = undoManager, let deleteCommand = DeleteCommand(nodesToDelete: nodesToDelete, undoManager: undoManager, errorHandler: ErrorHandler.present) else {
 			return
+		}
+
+		// Remove rows by the outline view’s own child indexes, which can differ from the tree’s.
+		var indexSetsGroupedByParent = [Node: IndexSet]()
+		for node in nodesToDelete {
+			let index = outlineView.childIndex(forItem: node)
+			guard index >= 0, let parent = outlineView.parent(forItem: node) as? Node else {
+				continue
+			}
+			indexSetsGroupedByParent[parent, default: IndexSet()].insert(index)
 		}
 
 		animatingChanges = true
 		outlineView.beginUpdates()
 
-		let indexSetsGroupedByParent = Node.indexSetsGroupedByParent(nodesToDelete)
 		for (parent, indexSet) in indexSetsGroupedByParent {
-			outlineView.removeItems(at: indexSet, inParent: parent.isRoot ? nil : parent, withAnimation: [.slideDown])
+			outlineView.removeItems(at: indexSet, inParent: parent, withAnimation: [.slideDown])
 		}
 
 		outlineView.endUpdates()
 
 		runCommand(deleteCommand)
 		animatingChanges = false
+	}
+
+	/// Asks for confirmation, then deletes. If the selection is deleted, selects the next row.
+	func confirmAndDeleteNodes(_ nodes: [Node]) {
+		guard !nodes.isEmpty, let window = view.window else {
+			return
+		}
+
+		let alert = SidebarDeleteItemsAlert.build(nodes)
+		alert.beginSheetModal(for: window) { [weak self] result in
+			guard result == NSApplication.ModalResponse.alertFirstButtonReturn, let self else {
+				return
+			}
+
+			let nodesToDelete = self.nodesInOutlineView(nodes)
+			let selectionIsDeleted = self.selectedNodes.contains { nodesToDelete.contains($0) || $0.hasAncestor(in: nodesToDelete) }
+			let nodeToSelect = selectionIsDeleted ? self.nodeToSelectAfterDeleting(nodesToDelete) : nil
+
+			self.deleteNodes(nodesToDelete)
+
+			if let nodeToSelect {
+				let row = self.outlineView.row(forItem: nodeToSelect)
+				if row >= 0 {
+					self.outlineView.selectRow(row)
+				}
+			}
+		}
+	}
+
+	/// The clicked or selected nodes that represent these objects — clicked first, for a feed in more than one folder.
+	func clickedOrSelectedNodes(representing objects: [AnyObject]) -> [Node] {
+		var candidateNodes = selectedNodes
+		if let clickedNode = nodeForRow(outlineView.clickedRow) {
+			candidateNodes.insert(clickedNode, at: 0)
+		}
+		return objects.compactMap { object in
+			candidateNodes.first { $0.representedObject === object }
+		}
+	}
+
+	/// The nodes that are still showing in the outline view.
+	func nodesInOutlineView(_ nodes: [Node]) -> [Node] {
+		nodes.filter { outlineView.row(forItem: $0) >= 0 }
+	}
+
+	/// The first node after the deleted rows (skipping their children), or else the node just before them.
+	func nodeToSelectAfterDeleting(_ deletedNodes: [Node]) -> Node? {
+		let rows = IndexSet(deletedNodes.map { outlineView.row(forItem: $0) }.filter { $0 >= 0 })
+		guard let firstRow = rows.first, let lastRow = rows.last else {
+			return nil
+		}
+
+		var row = lastRow + 1
+		while let node = nodeForRow(row) {
+			if !deletedNodes.contains(node) && !node.hasAncestor(in: deletedNodes) {
+				if !node.isGroupItem {
+					return node
+				}
+				break
+			}
+			row += 1
+		}
+
+		if let node = nodeForRow(firstRow - 1), !node.isGroupItem {
+			return node
+		}
+		return nil
 	}
 
 	// MARK: - API
@@ -537,13 +672,46 @@ extension SidebarViewController: NSUserInterfaceValidations {
 		if item.action == #selector(copy(_:)) {
 			return NSPasteboard.general.canCopyAtLeastOneObject(selectedObjects)
 		}
+		if let isShown = Self.smartFeedIsShown(forGoToAction: item.action) {
+			return isShown
+		}
 		return true
+	}
+
+	/// Whether the smart feed that a Go menu action selects is shown in the sidebar. Nil for other actions.
+	static func smartFeedIsShown(forGoToAction action: Selector?) -> Bool? {
+		switch action {
+		case #selector(gotoToday(_:)):
+			AppDefaults.showTodayFeed
+		case #selector(gotoAllUnread(_:)):
+			AppDefaults.showUnreadFeed
+		case #selector(gotoStarred(_:)):
+			AppDefaults.showStarredFeed
+		default:
+			nil
+		}
 	}
 }
 
 // MARK: - Private
 
 private extension SidebarViewController {
+
+	/// The outline view doesn’t resize its rows when the scroller appears or disappears,
+	/// which leaves the selection highlight at a stale width.
+	/// <https://github.com/Ranchero-Software/NetNewsWire/issues/5487>
+	func fitOutlineViewToVisibleWidth() {
+		guard let scrollView = outlineView.enclosingScrollView else {
+			return
+		}
+		let contentInsets = scrollView.contentInsets
+		let visibleWidth = scrollView.contentView.bounds.width - contentInsets.left - contentInsets.right
+		guard visibleWidth > 0, outlineView.frame.width != visibleWidth else {
+			return
+		}
+		outlineView.setFrameSize(NSSize(width: visibleWidth, height: outlineView.frame.height))
+		outlineView.sizeLastColumnToFit()
+	}
 
 	var accountNodes: [Account] {
 		return treeController.rootNode.childNodes.compactMap { $0.representedObject as? Account }
@@ -572,6 +740,16 @@ private extension SidebarViewController {
 			return nil
 		}
 		return node.representedObject as? Feed
+	}
+
+	func containerForNode(_ node: Node) -> Container? {
+		if let container = node.representedObject as? Container {
+			return container
+		}
+		if node.representedObject is Feed {
+			return node.parent?.representedObject as? Container
+		}
+		return nil
 	}
 
 	func addAllSelectedToFilterExceptions() {
@@ -634,6 +812,46 @@ private extension SidebarViewController {
 			treeControllerDelegate.resetFilterExceptions()
 			outlineView.reloadData()
 			expandNodes()
+			prefetchFeedIcons()
+		}
+	}
+
+	func updateRowSizeStyle() {
+		switch AppDefaults.sidebarTextSize {
+		case .system:
+			outlineView.rowSizeStyle = .default
+		case .small:
+			outlineView.rowSizeStyle = .small
+		case .medium:
+			outlineView.rowSizeStyle = .medium
+		case .large:
+			outlineView.rowSizeStyle = .large
+		case .extraLarge:
+			outlineView.rowSizeStyle = .custom
+			outlineView.rowHeight = Self.extraLargeRowHeight
+		case .extraExtraLarge:
+			outlineView.rowSizeStyle = .custom
+			outlineView.rowHeight = Self.extraExtraLargeRowHeight
+		}
+	}
+
+	func prefetchFeedIcons() {
+		guard AppDefaults.sidebarShowsIcons else {
+			return
+		}
+		var feeds = [Feed]()
+		collectExpandedFeeds(in: treeController.rootNode, into: &feeds)
+		IconImageCache.shared.prefetchImagesForFeeds(feeds)
+	}
+
+	private func collectExpandedFeeds(in node: Node, into feeds: inout [Feed]) {
+		for childNode in node.childNodes {
+			if let feed = childNode.representedObject as? Feed {
+				feeds.append(feed)
+			}
+			if outlineView.isItemExpanded(childNode) {
+				collectExpandedFeeds(in: childNode, into: &feeds)
+			}
 		}
 	}
 
@@ -730,11 +948,9 @@ private extension SidebarViewController {
 	}
 
 	func shouldSkipRow(_ row: Int) -> Bool {
-		let skipExpandedFolders = UserDefaults.standard.bool(forKey: "JalkutRespectFolderExpansionOnNextUnread")
-
 		// Skip group items, because they should never be selected.
-		// Skip expanded folders only if Jalkut's pref is enabled.
-		if  rowIsGroupItem(row) || (skipExpandedFolders && rowIsExpandedFolder(row)) {
+		// Skip expanded folders — go to the feeds inside instead.
+		if rowIsGroupItem(row) || rowIsExpandedFolder(row) {
 			return true
 		}
 		return false
@@ -794,11 +1010,12 @@ private extension SidebarViewController {
 	}
 
 	func configure(_ cell: SidebarCell, _ node: Node) {
-		cell.cellAppearance = SidebarCellAppearance(rowSizeStyle: outlineView.effectiveRowSizeStyle)
+		cell.cellAppearance = SidebarCellAppearance(textSize: AppDefaults.sidebarTextSize, systemRowSizeStyle: outlineView.effectiveRowSizeStyle)
 		cell.name = nameFor(node)
 		configureUnreadCount(cell, node)
+		cell.updateUnreadCountView() // A reused cell may predate a display setting change
 		configureFavicon(cell, node)
-		cell.shouldShowImage = node.representedObject is SmallIconProvider
+		cell.shouldShowImage = AppDefaults.sidebarShowsIcons && node.representedObject is SmallIconProvider
 	}
 
 	func configureUnreadCount(_ cell: SidebarCell, _ node: Node) {
@@ -806,7 +1023,7 @@ private extension SidebarViewController {
 	}
 
 	func configureFavicon(_ cell: SidebarCell, _ node: Node) {
-		cell.iconImage = imageFor(node)
+		cell.iconImage = AppDefaults.sidebarShowsIcons ? imageFor(node) : nil
 	}
 
 	func configureGroupCell(_ cell: NSTableCellView, _ node: Node) {
@@ -814,8 +1031,8 @@ private extension SidebarViewController {
 	}
 
 	func imageFor(_ node: Node) -> IconImage? {
-		if let feed = node.representedObject as? Feed, let feedIcon = IconImageCache.shared.imageForFeed(feed) {
-			return feedIcon
+		if let sidebarItem = node.representedObject as? SidebarItem, let iconImage = IconImageCache.shared.imageForFeed(sidebarItem) {
+			return iconImage
 		}
 		if let smallIconProvider = node.representedObject as? SmallIconProvider {
 			return smallIconProvider.smallIcon

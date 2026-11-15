@@ -19,6 +19,29 @@ function linkHover() {
 	}
 }
 
+// The selection as an HTML fragment — links, bold, and so on included.
+function selectedHTML() {
+	var selection = window.getSelection();
+	var container = document.createElement("div");
+	for (var i = 0; i < selection.rangeCount; i++) {
+		container.appendChild(selection.getRangeAt(i).cloneContents());
+	}
+	// Relative URLs would break outside this page.
+	container.querySelectorAll("a[href]").forEach(function(anchor) {
+		anchor.setAttribute("href", anchor.href);
+	});
+	// Images served from the timeline’s copy would break outside this page.
+	container.querySelectorAll("img[data-nnw-src]").forEach(function(image) {
+		image.setAttribute("src", image.getAttribute("data-nnw-src"));
+		image.removeAttribute("data-nnw-src");
+	});
+	// A single-paragraph selection doesn't need its <p> wrapper.
+	if (container.childNodes.length === 1 && container.firstChild.nodeName === "P") {
+		return container.firstChild.innerHTML;
+	}
+	return container.innerHTML;
+}
+
 function postRenderProcessing() {
 	scrollDetection();
 	linkHover();

@@ -10,12 +10,15 @@ import Foundation
 import RSCore
 import Articles
 import Account
-import os.log
+import os
+import Images
+import RSWeb
 
 @MainActor protocol TimelineDelegate: AnyObject {
 	func timelineSelectionDidChange(_: TimelineViewController, selectedArticles: [Article]?)
 	func timelineRequestedFeedSelection(_: TimelineViewController, feed: Feed)
 	func timelineInvalidatedRestorationState(_: TimelineViewController)
+	func timelineRequestedSortChange(_: TimelineViewController, parameters: ArticleSortParameters)
 }
 
 enum TimelineShowFeedName: Sendable {
@@ -30,14 +33,7 @@ final class TimelineViewController: NSViewController, UndoableCommandRunner, Unr
 
 	var sharingServicePickerDelegate: NSSharingServicePickerDelegate?
 
-	private var feedsHidingReadArticles = Set<SidebarItemIdentifier>()
-	private var readFilterEnabledTable: [SidebarItemIdentifier: Bool] {
-		var d = [SidebarItemIdentifier: Bool]()
-		for sidebarItemID in feedsHidingReadArticles {
-			d[sidebarItemID] = true
-		}
-		return d
-	}
+	private var readFilterEnabledTable = [SidebarItemIdentifier: Bool]()
 
 	var isReadFiltered: Bool? {
 		guard representedObjects?.count == 1, let timelineFeed = representedObjects?.first as? SidebarItem else {
@@ -46,11 +42,10 @@ final class TimelineViewController: NSViewController, UndoableCommandRunner, Unr
 		guard timelineFeed.defaultReadFilterType != .alwaysRead else {
 			return nil
 		}
-		if let sidebarItemID = timelineFeed.sidebarItemID {
-			return feedsHidingReadArticles.contains(sidebarItemID)
-		} else {
-			return timelineFeed.defaultReadFilterType == .read
+		if let sidebarItemID = timelineFeed.sidebarItemID, let readFiltered = readFilterEnabledTable[sidebarItemID] {
+			return readFiltered
 		}
+		return timelineFeed.defaultReadFilterType == .read
 	}
 
 	var isCleanUpAvailable: Bool {
@@ -74,6 +69,7 @@ final class TimelineViewController: NSViewController, UndoableCommandRunner, Unr
 	var representedObjects: [AnyObject]? {
 		didSet {
 			if !representedObjectArraysAreEqual(oldValue, representedObjects) {
+				seedReadFilterForFolders()
 				unreadCount = 0
 
 				selectionDidChange(nil)
@@ -99,12 +95,14 @@ final class TimelineViewController: NSViewController, UndoableCommandRunner, Unr
 			return TimelineWindowState(readArticlesFilterStateKeys: readArticlesFilterStateKeys,
 									   readArticlesFilterStateValues: readArticlesFilterStateValues,
 									   selectedAccountID: path[ArticlePathKey.accountID] as? String,
-									   selectedArticleID: path[ArticlePathKey.articleID] as? String)
+									   selectedArticleID: path[ArticlePathKey.articleID] as? String,
+									   sortParameters: sortParameters)
 		} else {
 			return TimelineWindowState(readArticlesFilterStateKeys: readArticlesFilterStateKeys,
 									   readArticlesFilterStateValues: readArticlesFilterStateValues,
 									   selectedAccountID: nil,
-									   selectedArticleID: nil)
+									   selectedArticleID: nil,
+									   sortParameters: sortParameters)
 		}
 
 	}
@@ -135,25 +133,24 @@ final class TimelineViewController: NSViewController, UndoableCommandRunner, Unr
 				// but some data in some of the articles may have changed.
 				// Just reload visible cells in this case: don’t call reloadData.
 				articleRowMap = [String: [Int]]()
+				remeasureRowHeights(rowsWithChangedArticles(comparedWith: oldValue))
 				reloadVisibleCells()
 				return
 			}
 
-			if let representedObjects = representedObjects, representedObjects.count == 1 && representedObjects.first is Feed {
-				showFeedNames = {
-					for article in articles {
-						if !article.byline().isEmpty {
-							return .byline
-						}
-					}
-					return .none
-				}()
+			if let representedObjects, representedObjects.count == 1 && representedObjects.first is Feed {
+				showFeedNames = .byline
 			} else {
 				showFeedNames = .feed
 			}
+			updateShowIcons() // Automatic depends on these articles’ author avatars, even when showFeedNames didn’t change
 
 			articleRowMap = [String: [Int]]()
+			removeRowHeightsForMissingArticles()
 			tableView.reloadData()
+			if showIcons {
+				IconImageCache.shared.prefetchImagesForArticles(articles)
+			}
 		}
 	}
 
@@ -176,6 +173,7 @@ final class TimelineViewController: NSViewController, UndoableCommandRunner, Unr
 	private var showFeedNames: TimelineShowFeedName = .none {
 		didSet {
 			if showFeedNames != oldValue {
+				rowHeights.removeAll()
 				updateShowIcons()
 				updateTableViewRowHeight()
 				reloadVisibleCells()
@@ -183,44 +181,124 @@ final class TimelineViewController: NSViewController, UndoableCommandRunner, Unr
 		}
 	}
 
-	private var showIcons = false
-	private var currentRowHeight: CGFloat = 0.0
+	private(set) var showIcons = false {
+		didSet {
+			if showIcons != oldValue {
+				rowHeights.removeAll()
+			}
+		}
+	}
+	private var estimatedRowHeight: CGFloat = 0.0 // For rows not yet measured
+	private var rowHeights = [ArticleIdentityKey: TimelineRowHeight]() // Height measured at rowHeightWidth
+	private var rowHeightWidth: CGFloat = 0.0 // The width of a standard-layout cell
+	private var rowHeightMeasuringStartRow: Int? // Where the next measuring pass starts
+	private var isRowHeightMeasuringScheduled = false
+	private static let rowHeightBatchSize = 500
+	private var thumbnailsDisplay = AppDefaults.timelineThumbnailsDisplay {
+		didSet {
+			if thumbnailsDisplay != oldValue {
+				thumbnailsDisplayDidChange()
+			}
+		}
+	}
+
+	/// Narrow enough that the prototype’s title uses every line.
+	private static let prototypeRowWidth: CGFloat = 100.0
+
+	/// Nil when the timeline doesn’t show thumbnails. Column layout never shows them.
+	private var thumbnailMode: ThumbnailMode? {
+		layout == .standard ? thumbnailsDisplay.thumbnailMode : nil
+	}
 
 	private var didRegisterForNotifications = false
 	static let fetchAndMergeArticlesQueue = CoalescingQueue(name: "Fetch and Merge Articles", interval: 0.5, maxInterval: 2.0)
 
-	private var sortDirection = AppDefaults.shared.timelineSortDirection {
+	// Owned by the window’s TimelineContainerViewController.
+	// Before the view loads there is nothing to re-sort — the first fetch uses the current value.
+	var sortParameters = ArticleSortParameters.newestFirst {
 		didSet {
-			if sortDirection != oldValue {
+			if isViewLoaded && sortParameters != oldValue {
 				sortParametersDidChange()
+				applySortDescriptorsToTableView()
 			}
 		}
 	}
-	private var groupByFeed = AppDefaults.shared.timelineGroupByFeed {
+	// Also owned by the container, which pushes the current value before and after the view loads.
+	var layout = TimelineLayout.standard {
 		didSet {
-			if groupByFeed != oldValue {
-				sortParametersDidChange()
+			if isViewLoaded && layout != oldValue {
+				layoutDidChange()
 			}
 		}
 	}
-	private var fontSize: FontSize = AppDefaults.shared.timelineFontSize {
+	// The nib’s single column, kept so standard layout can put it back.
+	var standardColumn: NSTableColumn?
+	// Set while columns are added and autosaved state is restored, which fires sortDescriptorsDidChange.
+	var isConfiguringTableColumns = false
+	private var textSize = AppDefaults.timelineTextSize {
 		didSet {
-			if fontSize != oldValue {
-				fontSizeDidChange()
+			if textSize != oldValue {
+				cellAppearanceSettingDidChange()
 			}
+		}
+	}
+	private var numberOfLines = AppDefaults.timelineNumberOfLines {
+		didSet {
+			if numberOfLines != oldValue {
+				cellAppearanceSettingDidChange()
+			}
+		}
+	}
+	private var showFullTitles = AppDefaults.timelineShowFullTitles {
+		didSet {
+			if showFullTitles != oldValue {
+				cellAppearanceSettingDidChange()
+			}
+		}
+	}
+	private var feedNameAndDateAboveTitle = AppDefaults.timelineFeedNameAndDateAboveTitle {
+		didSet {
+			if feedNameAndDateAboveTitle != oldValue {
+				cellAppearanceSettingDidChange()
+			}
+		}
+	}
+	private var fadesReadArticles = AppDefaults.timelineFadeReadArticles {
+		didSet {
+			if fadesReadArticles != oldValue {
+				reloadVisibleCells()
+			}
+		}
+	}
+	private static let readArticleAlphaValue: CGFloat = 0.6
+
+	/// Two accounts can have articles with the same articleID — the same feed in On My Mac and iCloud, for instance.
+	private struct ArticleIdentityKey: Hashable {
+		let accountID: String
+		let articleID: String
+
+		init(_ article: Article) {
+			self.accountID = article.accountID
+			self.articleID = article.articleID
 		}
 	}
 
-	private var previouslySelectedArticles: ArticleArray?
+	/// A changed article is a new instance, so `article` tells whether the height is still current.
+	private struct TimelineRowHeight {
+		let article: Article
+		let showsThumbnail: Bool
+		let height: CGFloat
+	}
+
+	private var previouslySelectedArticleKeys: [ArticleIdentityKey]?
 
 	private var oneSelectedArticle: Article? {
 		return selectedArticles.count == 1 ? selectedArticles.first : nil
 	}
 
 	private let keyboardDelegate = TimelineKeyboardDelegate()
-	private var timelineShowsSeparatorsObserver: NSKeyValueObservation?
 
-	private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "TimelineViewController")
+	private static let logger = Logger(subsystem: Logger.nnwSubsystem, category: "TimelineViewController")
 
 	convenience init(delegate: TimelineDelegate) {
 		self.init(nibName: "TimelineTableView", bundle: nil)
@@ -228,33 +306,53 @@ final class TimelineViewController: NSViewController, UndoableCommandRunner, Unr
 	}
 
 	override func viewDidLoad() {
-		cellAppearance = TimelineCellAppearance(showIcon: false, fontSize: fontSize)
-		cellAppearanceWithIcon = TimelineCellAppearance(showIcon: true, fontSize: fontSize)
+		// The search timeline can be created long before its view loads, and defaults are observed only from here on.
+		textSize = AppDefaults.timelineTextSize
+		numberOfLines = AppDefaults.timelineNumberOfLines
+		showFullTitles = AppDefaults.timelineShowFullTitles
+		feedNameAndDateAboveTitle = AppDefaults.timelineFeedNameAndDateAboveTitle
+		fadesReadArticles = AppDefaults.timelineFadeReadArticles
+		updateGridStyle()
+		thumbnailsDisplay = AppDefaults.timelineThumbnailsDisplay
+		updateCellAppearances()
 
-		updateRowHeights()
-		tableView.rowHeight = currentRowHeight
+		updateEstimatedRowHeight()
 		tableView.target = self
 		tableView.doubleAction = #selector(openArticleInBrowser(_:))
 		tableView.setDraggingSourceOperationMask(.copy, forLocal: false)
 		tableView.keyboardDelegate = keyboardDelegate
-
+		tableView.rowHeightDelegate = self
 		tableView.style = .inset
+		tableView.gridColor = .separatorColor
+
+		standardColumn = tableView.tableColumns.first
+		configureTableView(for: layout)
+		updateGridStyle()
+		updateShowIcons()
 
 		if !didRegisterForNotifications {
 			NotificationCenter.default.addObserver(self, selector: #selector(statusesDidChange(_:)), name: .StatusesDidChange, object: nil)
-			NotificationCenter.default.addObserver(self, selector: #selector(feedIconDidBecomeAvailable(_:)), name: .feedIconDidBecomeAvailable, object: nil)
-			NotificationCenter.default.addObserver(self, selector: #selector(avatarDidBecomeAvailable(_:)), name: .AvatarDidBecomeAvailable, object: nil)
-			NotificationCenter.default.addObserver(self, selector: #selector(faviconDidBecomeAvailable(_:)), name: .FaviconDidBecomeAvailable, object: nil)
+			NotificationCenter.default.addObserver(self, selector: #selector(handleFeedIconImageDidChange(_:)), name: .feedIconImageDidChange, object: nil)
+			NotificationCenter.default.addObserver(self, selector: #selector(handleAuthorAvatarImageDidChange(_:)), name: .authorAvatarImageDidChange, object: nil)
+			NotificationCenter.default.addObserver(self, selector: #selector(handleGrayscaleIconsDidChange(_:)), name: .grayscaleIconsDidChange, object: nil)
+			NotificationCenter.default.addObserver(self, selector: #selector(handleThumbnailDidBecomeAvailable(_:)), name: .thumbnailDidBecomeAvailable, object: nil)
+			NotificationCenter.default.addObserver(self, selector: #selector(handleArticleThumbnailDownloadDidFail(_:)), name: .articleThumbnailDownloadDidFail, object: nil)
+			NotificationCenter.default.addObserver(self, selector: #selector(handleNetworkStatusDidChange(_:)), name: .networkStatusDidChange, object: nil)
 			NotificationCenter.default.addObserver(self, selector: #selector(accountDidDownloadArticles(_:)), name: .AccountDidDownloadArticles, object: nil)
 			NotificationCenter.default.addObserver(self, selector: #selector(accountStateDidChange(_:)), name: .AccountStateDidChange, object: nil)
 			NotificationCenter.default.addObserver(self, selector: #selector(accountsDidChange(_:)), name: .UserDidAddAccount, object: nil)
-			NotificationCenter.default.addObserver(self, selector: #selector(accountsDidChange(_:)), name: .UserDidDeleteAccount, object: nil)
+			NotificationCenter.default.addObserver(self, selector: #selector(userDidDeleteAccount(_:)), name: .UserDidDeleteAccount, object: nil)
+			NotificationCenter.default.addObserver(self, selector: #selector(handleSidebarDidAcceptDrop(_:)), name: .SidebarDidAcceptDrop, object: nil)
 			NotificationCenter.default.addObserver(self, selector: #selector(containerChildrenDidChange(_:)), name: .ChildrenDidChange, object: nil)
-			NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
-				Task { @MainActor in
-					self?.userDefaultsDidChange()
-				}
-			}
+			NotificationCenter.default.addObserver(self, selector: #selector(handleTimelineShowSeparatorsDidChange(_:)), name: .timelineShowSeparatorsDidChange, object: nil)
+			NotificationCenter.default.addObserver(self, selector: #selector(handleTimelineThumbnailsDisplayDidChange(_:)), name: .timelineThumbnailsDisplayDidChange, object: nil)
+			NotificationCenter.default.addObserver(self, selector: #selector(handleTimelineFeedIconsDisplayDidChange(_:)), name: .timelineFeedIconsDisplayDidChange, object: nil)
+			NotificationCenter.default.addObserver(self, selector: #selector(handleTimelineIconSizeDidChange(_:)), name: .timelineIconSizeDidChange, object: nil)
+			NotificationCenter.default.addObserver(self, selector: #selector(handleTimelineTextSizeDidChange(_:)), name: .timelineTextSizeDidChange, object: nil)
+			NotificationCenter.default.addObserver(self, selector: #selector(handleTimelineNumberOfLinesDidChange(_:)), name: .timelineNumberOfLinesDidChange, object: nil)
+			NotificationCenter.default.addObserver(self, selector: #selector(handleTimelineShowFullTitlesDidChange(_:)), name: .timelineShowFullTitlesDidChange, object: nil)
+			NotificationCenter.default.addObserver(self, selector: #selector(handleTimelineFeedNameAndDateAboveTitleDidChange(_:)), name: .timelineFeedNameAndDateAboveTitleDidChange, object: nil)
+			NotificationCenter.default.addObserver(self, selector: #selector(handleTimelineFadeReadArticlesDidChange(_:)), name: .timelineFadeReadArticlesDidChange, object: nil)
 			didRegisterForNotifications = true
 		}
 
@@ -265,10 +363,16 @@ final class TimelineViewController: NSViewController, UndoableCommandRunner, Unr
 		sharingServiceDelegate = SharingServiceDelegate(self.view.window)
 	}
 
+	override func viewDidLayout() {
+		super.viewDidLayout()
+		fitTableViewToVisibleWidthInStandardLayout()
+	}
+
 	// MARK: - API
 
 	func markAllAsRead(completion: (() -> Void)? = nil) {
 		guard let undoManager = undoManager, let markReadCommand = MarkStatusCommand(initialArticles: articles, markingRead: true, undoManager: undoManager, completion: completion) else {
+			completion?()
 			return
 		}
 		runCommand(markReadCommand)
@@ -313,11 +417,11 @@ final class TimelineViewController: NSViewController, UndoableCommandRunner, Unr
 	// MARK: State Restoration
 
 	private func noteSidebarItemHidesReadArticles(_ sidebarItemID: SidebarItemIdentifier) {
-		feedsHidingReadArticles.insert(sidebarItemID)
+		readFilterEnabledTable[sidebarItemID] = true
 	}
 
 	private func noteSidebarItemShowsReadArticles(_ sidebarItemID: SidebarItemIdentifier) {
-		feedsHidingReadArticles.remove(sidebarItemID)
+		readFilterEnabledTable[sidebarItemID] = false
 	}
 
 	func restoreState(from state: TimelineWindowState) {
@@ -394,7 +498,18 @@ final class TimelineViewController: NSViewController, UndoableCommandRunner, Unr
 	// MARK: - Actions
 
 	@objc func openArticleInBrowser(_ sender: Any?) {
-		if let link = oneSelectedArticle?.preferredLink {
+		let article: Article?
+
+		if let tableView = sender as? NSTableView, tableView === self.tableView, let clickedArticle = articles.articleAtRow(tableView.clickedRow) {
+			article = clickedArticle
+			if !clickedArticle.status.read {
+				markArticles(Set([clickedArticle]), statusKey: .read, flag: true)
+			}
+		} else {
+			article = oneSelectedArticle
+		}
+
+		if let link = article?.preferredLink {
 			Browser.open(link, invertPreference: NSApp.currentEvent?.modifierFlags.contains(.shift) ?? false)
 		}
 	}
@@ -444,13 +559,11 @@ final class TimelineViewController: NSViewController, UndoableCommandRunner, Unr
 
 		tableView.selectRow(nextRowIndex)
 
-		let followingRowIndex = nextRowIndex - 1
-		if followingRowIndex < 0 {
+		if scrollToRowIfNotFullyVisible(nextRowIndex) {
 			return
 		}
 
-		tableView.scrollToRowIfNotVisible(followingRowIndex)
-
+		scrollToRowIfNotFullyVisible(nextRowIndex - 1)
 	}
 
 	@IBAction func selectNextDown(_ sender: Any?) {
@@ -466,13 +579,11 @@ final class TimelineViewController: NSViewController, UndoableCommandRunner, Unr
 
 		tableView.selectRow(nextRowIndex)
 
-		let followingRowIndex = nextRowIndex + 1
-		if followingRowIndex > tableMaxIndex {
+		if scrollToRowIfNotFullyVisible(nextRowIndex) {
 			return
 		}
 
-		tableView.scrollToRowIfNotVisible(followingRowIndex)
-
+		scrollToRowIfNotFullyVisible(nextRowIndex + 1)
 	}
 
 	func toggleReadStatusForSelectedArticles() {
@@ -663,8 +774,8 @@ final class TimelineViewController: NSViewController, UndoableCommandRunner, Unr
 		updateUnreadCount()
 	}
 
-	@objc func feedIconDidBecomeAvailable(_ note: Notification) {
-		guard showIcons, let feed = note.userInfo?[UserInfoKey.feed] as? Feed else {
+	@objc func handleFeedIconImageDidChange(_ notification: Notification) {
+		guard showIcons, let feed = notification.userInfo?[UserInfoKey.feed] as? Feed else {
 			return
 		}
 		let indexesToReload = tableView.indexesOfAvailableRowsPassingTest { (row) -> Bool in
@@ -678,8 +789,8 @@ final class TimelineViewController: NSViewController, UndoableCommandRunner, Unr
 		}
 	}
 
-	@objc func avatarDidBecomeAvailable(_ note: Notification) {
-		guard showIcons, let avatarURL = note.userInfo?[UserInfoKey.url] as? String else {
+	@objc func handleAuthorAvatarImageDidChange(_ notification: Notification) {
+		guard showIcons, let avatarURL = notification.userInfo?[UserInfoKey.url] as? String else {
 			return
 		}
 
@@ -699,9 +810,91 @@ final class TimelineViewController: NSViewController, UndoableCommandRunner, Unr
 		}
 	}
 
-	@objc func faviconDidBecomeAvailable(_ note: Notification) {
+	@objc func handleGrayscaleIconsDidChange(_ notification: Notification) {
+		guard showIcons else {
+			return
+		}
+		reloadVisibleCells()
+	}
+
+	@objc func handleThumbnailDidBecomeAvailable(_ notification: Notification) {
+		guard let thumbnailMode, let url = notification.userInfo?[ThumbnailDownloader.urlKey] as? String else {
+			return
+		}
+		// The row already has room for the thumbnail, so only the image changes.
+		tableView.enumerateAvailableRowViews { rowView, row in
+			guard let article = articles.articleAtRow(row), ArticleThumbnailFinder.shared.thumbnailURL(for: article, mode: thumbnailMode) == url, let cell = cellForRowView(rowView) as? TimelineTableCellView, let thumbnail = ThumbnailDownloader.shared.thumbnail(url: url, mode: thumbnailMode, articleTitle: article.title) else {
+				return
+			}
+			cell.thumbnail = thumbnail
+		}
+	}
+
+	@objc func handleArticleThumbnailDownloadDidFail(_ notification: Notification) {
+		guard thumbnailMode != nil, let articleIDs = notification.userInfo?[ArticleThumbnailFinder.articleIDsKey] as? Set<String> else {
+			return
+		}
+		// Articles that used the failed URL now get their next source, or none.
+		thumbnailURLsDidChange(for: articleIDs)
+	}
+
+	@objc func handleNetworkStatusDidChange(_ notification: Notification) {
+		guard thumbnailMode != nil else {
+			return
+		}
+		// After ArticleThumbnailFinder forgets its choices, which it does on this notification too.
+		Task { @MainActor in
+			remeasureRowsWhoseThumbnailChanged()
+			// Thumbnails that couldn’t download while offline try again.
+			if ThumbnailDownloader.shared.networkAllowsDownloads {
+				reloadVisibleCells()
+			}
+		}
+	}
+
+	@objc func handleTimelineShowSeparatorsDidChange(_ notification: Notification) {
+		updateGridStyle()
+	}
+
+	@objc func handleTimelineThumbnailsDisplayDidChange(_ notification: Notification) {
+		thumbnailsDisplay = AppDefaults.timelineThumbnailsDisplay
+	}
+
+	@objc func handleTimelineFeedIconsDisplayDidChange(_ notification: Notification) {
+		updateShowIcons()
 		if showIcons {
-			queueReloadAvailableCells()
+			IconImageCache.shared.prefetchImagesForArticles(articles)
+		}
+		performBlockAndRestoreSelection {
+			tableView.reloadData()
+		}
+	}
+
+	@objc func handleTimelineTextSizeDidChange(_ notification: Notification) {
+		textSize = AppDefaults.timelineTextSize
+	}
+
+	@objc func handleTimelineNumberOfLinesDidChange(_ notification: Notification) {
+		numberOfLines = AppDefaults.timelineNumberOfLines
+	}
+
+	@objc func handleTimelineShowFullTitlesDidChange(_ notification: Notification) {
+		showFullTitles = AppDefaults.timelineShowFullTitles
+	}
+
+	@objc func handleTimelineFeedNameAndDateAboveTitleDidChange(_ notification: Notification) {
+		feedNameAndDateAboveTitle = AppDefaults.timelineFeedNameAndDateAboveTitle
+	}
+
+	@objc func handleTimelineFadeReadArticlesDidChange(_ notification: Notification) {
+		fadesReadArticles = AppDefaults.timelineFadeReadArticles
+	}
+
+	@objc func handleTimelineIconSizeDidChange(_ notification: Notification) {
+		updateCellAppearances()
+		rowHeights.removeAll()
+		performBlockAndRestoreSelection {
+			tableView.reloadData()
 		}
 	}
 
@@ -718,26 +911,50 @@ final class TimelineViewController: NSViewController, UndoableCommandRunner, Unr
 
 	@objc func accountStateDidChange(_ note: Notification) {
 		if representedObjectsContainsAnyPseudoFeed() {
-			fetchAndReplaceArticlesAsync()
+			fetchAndReplacePreservingSelectionAsync()
 		}
 	}
 
 	@objc func accountsDidChange(_ note: Notification) {
 		if representedObjectsContainsAnyPseudoFeed() {
-			fetchAndReplaceArticlesAsync()
+			fetchAndReplacePreservingSelectionAsync()
 		}
+	}
+
+	@objc func userDidDeleteAccount(_ note: Notification) {
+		undoManager?.removeAllActions() // Undo stack may contain actions for the deleted account.
+		if representedObjectsContainsAnyPseudoFeed() {
+			fetchAndReplacePreservingSelectionAsync()
+		}
+	}
+
+	@objc func handleSidebarDidAcceptDrop(_ note: Notification) {
+		// Drops aren't undoable — without this, ⌘Z could silently undo an older, unrelated action.
+		// <https://github.com/Ranchero-Software/NetNewsWire/issues/3583>
+		undoManager?.removeAllActions()
 	}
 
 	@objc func containerChildrenDidChange(_ note: Notification) {
 		if representedObjectsContainsAnyPseudoFeed() || representedObjectsContainAnyFolder() {
-			fetchAndReplaceArticlesAsync()
+			// Merge, don't replace — replacing drops articles read this session
+			// from All Unread. Matches iOS.
+			// <https://github.com/Ranchero-Software/NetNewsWire/issues/3832>
+			queueFetchAndMergeArticles()
 		}
 	}
 
-	@MainActor func userDefaultsDidChange() {
-		fontSize = AppDefaults.shared.timelineFontSize
-		sortDirection = AppDefaults.shared.timelineSortDirection
-		groupByFeed = AppDefaults.shared.timelineGroupByFeed
+	/// Separators between rows, never in column layout. `TimelineTableRowView` draws them.
+	private func updateGridStyle() {
+		let showsSeparators = layout == .standard && AppDefaults.timelineShowSeparators
+		let gridStyleMask: NSTableView.GridLineStyle = showsSeparators ? .solidHorizontalGridLineMask : []
+		if tableView.gridStyleMask != gridStyleMask {
+			tableView.gridStyleMask = gridStyleMask
+		}
+	}
+
+	/// The one place the row height is set. In standard layout, it’s the estimate for rows not yet measured.
+	func updateTableViewRowHeight() {
+		tableView.rowHeight = layout == .column ? columnRowHeight() : estimatedRowHeight
 	}
 
 	// MARK: - Reloading Data
@@ -785,25 +1002,208 @@ final class TimelineViewController: NSViewController, UndoableCommandRunner, Unr
 		if indexes.isEmpty {
 			return
 		}
-		tableView.reloadData(forRowIndexes: indexes, columnIndexes: NSIndexSet(index: 0) as IndexSet)
+		tableView.reloadData(forRowIndexes: indexes, columnIndexes: IndexSet(integersIn: 0..<tableView.numberOfColumns))
 	}
 
 	// MARK: - Cell Configuring
 
-	private func calculateRowHeight() -> CGFloat {
+	/// The full number of lines, with no icon or thumbnail.
+	private func calculateEstimatedRowHeight() -> CGFloat {
 		let longTitle = "But I must explain to you how all this mistaken idea of denouncing pleasure and praising pain was born and I will give you a complete account of the system, and expound the actual teachings of the great explorer of the truth, the master-builder of human happiness. No one rejects, dislikes, or avoids pleasure itself, because it is pleasure, but because those who do not know how to pursue pleasure rationally encounter consequences that are extremely painful. Nor again is there anyone who loves or pursues or desires to obtain pain of itself, because it is pain, but because occasionally circumstances occur in which toil and pain can procure him some great pleasure. To take a trivial example, which of us ever undertakes laborious physical exercise, except to obtain some advantage from it? But who has any right to find fault with a man who chooses to enjoy a pleasure that has no annoying consequences, or one who avoids a pain that produces no resultant pleasure?"
 		let prototypeID = "prototype"
 		let status = ArticleStatus(articleID: prototypeID, read: false, starred: false, dateArrived: Date())
-		let prototypeArticle = Article(accountID: prototypeID, articleID: prototypeID, feedID: prototypeID, uniqueID: prototypeID, title: longTitle, contentHTML: nil, contentText: nil, markdown: nil, url: nil, externalURL: nil, summary: nil, imageURL: nil, datePublished: nil, dateModified: nil, authors: nil, status: status)
+		let prototypeArticle = Article(accountID: prototypeID, articleID: prototypeID, feedID: prototypeID, uniqueID: prototypeID, title: longTitle, contentHTML: nil, contentText: nil, markdown: nil, url: nil, externalURL: nil, summary: nil, imageURL: nil, thumbnailURL: nil, datePublished: nil, dateModified: nil, authors: nil, attachments: nil, status: status)
 
-		let prototypeCellData = TimelineCellData(article: prototypeArticle, showFeedName: .feed, feedName: "Prototype Feed Name", byline: nil, iconImage: nil, showIcon: false)
-		let height = TimelineCellLayout.height(for: 100, cellData: prototypeCellData, appearance: cellAppearance)
-		return height
+		let prototypeCellData = TimelineCellData(article: prototypeArticle, showFeedName: .feed, feedName: "Prototype Feed Name", byline: nil, iconImage: nil, showIcon: false, thumbnail: nil, showThumbnail: false)
+		return TimelineCellLayout.height(for: Self.prototypeRowWidth, cellData: prototypeCellData, appearance: cellAppearance)
 	}
 
-	private func updateRowHeights() {
-		currentRowHeight = calculateRowHeight()
+	private func updateEstimatedRowHeight() {
+		estimatedRowHeight = calculateEstimatedRowHeight()
 		updateTableViewRowHeight()
+	}
+
+	// MARK: - Row Heights
+
+	/// Nil when the row hasn’t been measured, or its article changed since.
+	private func measuredRowHeight(for article: Article) -> CGFloat? {
+		guard let rowHeight = rowHeights[ArticleIdentityKey(article)], rowHeight.article === article else {
+			return nil
+		}
+		return rowHeight.height
+	}
+
+	private func measureRowHeight(for article: Article) {
+		let showThumbnail = articleShowsThumbnail(article)
+		let cellData = TimelineCellData(article: article, showFeedName: showFeedNames, feedName: article.feed?.nameForDisplay, byline: article.byline(), iconImage: nil, showIcon: showIcons, thumbnail: nil, showThumbnail: showThumbnail)
+		let appearance: TimelineCellAppearance = showIcons ? cellAppearanceWithIcon : cellAppearance
+		let height = TimelineCellLayout.height(for: rowHeightWidth, cellData: cellData, appearance: appearance)
+		rowHeights[ArticleIdentityKey(article)] = TimelineRowHeight(article: article, showsThumbnail: showThumbnail, height: height)
+	}
+
+	private func articleShowsThumbnail(_ article: Article) -> Bool {
+		guard let thumbnailMode else {
+			return false
+		}
+		return ArticleThumbnailFinder.shared.thumbnailURL(for: article, mode: thumbnailMode) != nil
+	}
+
+	/// Measures right away when there are few rows, so they don’t show the estimate first.
+	private func remeasureRowHeights(_ rows: IndexSet) {
+		guard layout == .standard, !rows.isEmpty else {
+			return
+		}
+		let measuresNow = rows.count <= Self.rowHeightBatchSize && rowHeightWidth > 0.0
+		for row in rows {
+			guard let article = articles.articleAtRow(row) else {
+				continue
+			}
+			rowHeights[ArticleIdentityKey(article)] = nil
+			if measuresNow {
+				measureRowHeight(for: article)
+			}
+		}
+		noteHeightOfRowsKeepingScrollPosition(rows)
+	}
+
+	/// `oldArticles` are the same articles in the same order. A changed article is a new instance.
+	private func rowsWithChangedArticles(comparedWith oldArticles: ArticleArray) -> IndexSet {
+		var rows = IndexSet()
+		for (row, (oldArticle, article)) in zip(oldArticles, articles).enumerated() where oldArticle !== article {
+			rows.insert(row)
+		}
+		return rows
+	}
+
+	/// For thumbnail choices that change with no failure notification, such as after a network change.
+	private func remeasureRowsWhoseThumbnailChanged() {
+		var rows = IndexSet()
+		for (row, article) in articles.enumerated() {
+			if let rowHeight = rowHeights[ArticleIdentityKey(article)], rowHeight.showsThumbnail != articleShowsThumbnail(article) {
+				rows.insert(row)
+			}
+		}
+		remeasureRowHeights(rows)
+	}
+
+	private func removeRowHeightsForMissingArticles() {
+		let articleKeys = Set(articles.map { ArticleIdentityKey($0) })
+		rowHeights = rowHeights.filter { articleKeys.contains($0.key) }
+	}
+
+	/// A width change makes every height stale. Rows near the visible ones are measured during layout, the rest in passes.
+	private func updateRowHeightWidth() {
+		let width = standardCellWidth()
+		guard width > 0.0, width != rowHeightWidth else {
+			return
+		}
+		rowHeightWidth = width
+		rowHeights.removeAll()
+		scheduleRowHeightMeasuring(from: 0)
+	}
+
+	/// A shown cell’s width when there is one. Otherwise the width the table gives cells.
+	private func standardCellWidth() -> CGFloat {
+		let visibleRows = tableView.rows(in: tableView.visibleRect)
+		if visibleRows.length > 0, let cell = tableView.view(atColumn: 0, row: visibleRows.location, makeIfNecessary: false) {
+			return cell.frame.width
+		}
+		if tableView.numberOfRows > 0 {
+			return tableView.frameOfCell(atColumn: 0, row: 0).width
+		}
+		guard let column = tableView.tableColumns.first else {
+			return 0.0
+		}
+		return column.width - tableView.intercellSpacing.width
+	}
+
+	/// The visible rows plus a screenful above and below, so scrolling a little doesn’t show estimates.
+	private func measureRowHeightsNearVisibleRows() {
+		guard rowHeightWidth > 0.0 else {
+			return
+		}
+		let visibleRect = tableView.visibleRect
+		let nearbyRows = tableView.rows(in: visibleRect.insetBy(dx: 0.0, dy: -visibleRect.height))
+		guard nearbyRows.length > 0 else {
+			return
+		}
+		var measuredRows = IndexSet()
+		for row in nearbyRows.location..<NSMaxRange(nearbyRows) {
+			guard let article = articles.articleAtRow(row), measuredRowHeight(for: article) == nil else {
+				continue
+			}
+			measureRowHeight(for: article)
+			measuredRows.insert(row)
+		}
+		if !measuredRows.isEmpty {
+			noteHeightOfRowsKeepingScrollPosition(measuredRows)
+		}
+	}
+
+	private func scheduleRowHeightMeasuring(from row: Int) {
+		rowHeightMeasuringStartRow = min(rowHeightMeasuringStartRow ?? row, row)
+		guard !isRowHeightMeasuringScheduled else {
+			return
+		}
+		isRowHeightMeasuringScheduled = true
+		Task { @MainActor [weak self] in
+			self?.measureNextRowHeightBatch()
+		}
+	}
+
+	/// Measures up to `rowHeightBatchSize` rows per pass, so a large timeline doesn’t block the main thread.
+	/// Waits during live resize, when only rows near the visible ones are measured.
+	private func measureNextRowHeightBatch() {
+		isRowHeightMeasuringScheduled = false
+		guard let startRow = rowHeightMeasuringStartRow, layout == .standard, rowHeightWidth > 0.0, !tableView.inLiveResize else {
+			return
+		}
+		rowHeightMeasuringStartRow = nil
+
+		var measuredRows = IndexSet()
+		var row = startRow
+		while row < articles.count && measuredRows.count < Self.rowHeightBatchSize {
+			let article = articles[row]
+			if measuredRowHeight(for: article) == nil {
+				measureRowHeight(for: article)
+				measuredRows.insert(row)
+			}
+			row += 1
+		}
+
+		if !measuredRows.isEmpty {
+			noteHeightOfRowsKeepingScrollPosition(measuredRows)
+		}
+		if row < articles.count {
+			scheduleRowHeightMeasuring(from: row)
+		}
+	}
+
+	/// Keeps the top visible row in place when rows above it change height.
+	private func noteHeightOfRowsKeepingScrollPosition(_ rowIndexes: IndexSet) {
+		guard let scrollView = tableView.enclosingScrollView else {
+			noteHeightOfRowsWithoutAnimation(rowIndexes)
+			return
+		}
+		let clipView = scrollView.contentView
+		let topY = clipView.bounds.minY
+		let topRow = tableView.row(at: NSPoint(x: 0, y: max(topY, 0)))
+		guard topRow > 0, let firstChangedRow = rowIndexes.first, firstChangedRow < topRow else {
+			noteHeightOfRowsWithoutAnimation(rowIndexes)
+			return
+		}
+
+		let offsetIntoTopRow = topY - tableView.rect(ofRow: topRow).minY
+		noteHeightOfRowsWithoutAnimation(rowIndexes)
+		clipView.scroll(to: NSPoint(x: clipView.bounds.minX, y: tableView.rect(ofRow: topRow).minY + offsetIntoTopRow))
+		scrollView.reflectScrolledClipView(clipView)
+	}
+
+	private func noteHeightOfRowsWithoutAnimation(_ rowIndexes: IndexSet) {
+		NSAnimationContext.runAnimationGroup { context in
+			context.duration = 0
+			tableView.noteHeightOfRows(withIndexesChanged: rowIndexes)
+		}
 	}
 
 	@objc func fetchAndMergeArticles() {
@@ -886,7 +1286,33 @@ extension TimelineViewController: NSTableViewDataSource {
 	func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
 		// Keeping -[NSTableViewDelegate tableView:heightOfRow:] implemented fixes
 		// an issue that the bottom inset of NSTableView disappears on macOS Monterey.
+		guard layout == .standard, let article = articles.articleAtRow(row) else {
+			return tableView.rowHeight
+		}
+		if let height = measuredRowHeight(for: article) {
+			return height
+		}
+		scheduleRowHeightMeasuring(from: row)
 		return tableView.rowHeight
+	}
+}
+
+// MARK: - TimelineTableViewRowHeightDelegate
+
+extension TimelineViewController: TimelineTableViewRowHeightDelegate {
+
+	func timelineTableViewDidLayout(_ tableView: TimelineTableView) {
+		guard layout == .standard else {
+			return
+		}
+		updateRowHeightWidth()
+		measureRowHeightsNearVisibleRows()
+	}
+
+	func timelineTableViewDidEndLiveResize(_ tableView: TimelineTableView) {
+		if let rowHeightMeasuringStartRow {
+			scheduleRowHeightMeasuring(from: rowHeightMeasuringStartRow)
+		}
 	}
 }
 
@@ -896,22 +1322,41 @@ extension TimelineViewController: NSTableViewDelegate {
 	private static let rowViewIdentifier = NSUserInterfaceItemIdentifier(rawValue: "timelineRow")
 
 	func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
-		if let rowView: TimelineTableRowView = tableView.makeView(withIdentifier: TimelineViewController.rowViewIdentifier, owner: nil) as? TimelineTableRowView {
-			return rowView
+		if layout == .column {
+			// The standard row view suits column layout. TimelineTableRowView only knows the standard cell.
+			return nil
 		}
-		let rowView = TimelineTableRowView()
-		rowView.identifier = TimelineViewController.rowViewIdentifier
+		let rowView: TimelineTableRowView
+		if let reusedRowView = tableView.makeView(withIdentifier: TimelineViewController.rowViewIdentifier, owner: nil) as? TimelineTableRowView {
+			rowView = reusedRowView
+		} else {
+			rowView = TimelineTableRowView()
+			rowView.identifier = TimelineViewController.rowViewIdentifier
+		}
+		// Rows change only by reloading, which asks for every row view again, so a former last row doesn’t keep this.
+		rowView.isLastRow = row == tableView.numberOfRows - 1
 		return rowView
 	}
 
 	private static let timelineCellIdentifier = NSUserInterfaceItemIdentifier(rawValue: "timelineCell")
 
 	func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+		let cellView = layout == .column ? columnCellView(for: tableColumn, row: row) : standardCellView(for: row)
+		if let cellView {
+			applyReadFading(to: cellView, row: row)
+		}
+		return cellView
+	}
 
+	private func standardCellView(for row: Int) -> NSView {
 		func configure(_ cell: TimelineTableCellView) {
 			cell.cellAppearance = showIcons ? cellAppearanceWithIcon : cellAppearance
 			if let article = articles.articleAtRow(row) {
 				configureTimelineCell(cell, article: article)
+				if measuredRowHeight(for: article) == nil {
+					// Measured after layout, before it draws.
+					tableView.needsLayout = true
+				}
 			} else {
 				makeTimelineCellEmpty(cell)
 			}
@@ -929,6 +1374,8 @@ extension TimelineViewController: NSTableViewDelegate {
 	}
 
 	func tableViewSelectionDidChange(_ notification: Notification) {
+		applyReadFadingToAvailableRows()
+
 		if selectedArticles.isEmpty {
 			selectionDidChange(nil)
 			return
@@ -945,27 +1392,51 @@ extension TimelineViewController: NSTableViewDelegate {
 	}
 
 	private func selectionDidChange(_ selectedArticles: ArticleArray?) {
-		guard selectedArticles != previouslySelectedArticles else { return }
-		previouslySelectedArticles = selectedArticles
+		// Compare by identity, not content — re-pushing an updated article that the user is reading
+		// would reset the article view scroll position.
+		// <https://github.com/Ranchero-Software/NetNewsWire/issues/5387>
+		let selectedArticleKeys = selectedArticles?.map { ArticleIdentityKey($0) }
+		guard selectedArticleKeys != previouslySelectedArticleKeys else {
+			return
+		}
+		previouslySelectedArticleKeys = selectedArticleKeys
 		delegate?.timelineSelectionDidChange(self, selectedArticles: selectedArticles)
 		delegate?.timelineInvalidatedRestorationState(self)
 	}
 
 	private func configureTimelineCell(_ cell: TimelineTableCellView, article: Article) {
 		cell.objectValue = article
-		let iconImage = article.iconImage()
-		cell.cellData = TimelineCellData(article: article, showFeedName: showFeedNames, feedName: article.feed?.nameForDisplay, byline: article.byline(), iconImage: iconImage, showIcon: showIcons)
-	}
-
-	private func iconFor(_ article: Article) -> IconImage? {
-		if !showIcons {
-			return nil
+		let iconImage = showIcons ? article.iconImage() : nil
+		var thumbnail: NSImage?
+		var showThumbnail = false
+		if let thumbnailMode, let thumbnailURL = ArticleThumbnailFinder.shared.thumbnailURL(for: article, mode: thumbnailMode) {
+			showThumbnail = true
+			thumbnail = ThumbnailDownloader.shared.thumbnail(url: thumbnailURL, mode: thumbnailMode, articleTitle: article.title)
 		}
-		return IconImageCache.shared.imageForArticle(article)
+		cell.cellData = TimelineCellData(article: article, showFeedName: showFeedNames, feedName: article.feed?.nameForDisplay, byline: article.byline(), iconImage: iconImage, showIcon: showIcons, thumbnail: thumbnail, showThumbnail: showThumbnail)
 	}
 
-	private func avatarForAuthor(_ author: Author) -> IconImage? {
-		return AuthorAvatarDownloader.shared.image(for: author)
+	/// Fades the cell views, not the row view, so the selection highlight and separators stay full strength.
+	/// The selected row never fades, since selecting an article marks it read.
+	private func applyReadFading(to cellView: NSView, row: Int) {
+		var alphaValue: CGFloat = 1.0
+		if fadesReadArticles, let article = articles.articleAtRow(row), article.status.read, !tableView.isRowSelected(row) {
+			alphaValue = Self.readArticleAlphaValue
+		}
+		if cellView.alphaValue != alphaValue {
+			cellView.alphaValue = alphaValue
+		}
+	}
+
+	/// Selection changes don’t reload cells.
+	private func applyReadFadingToAvailableRows() {
+		tableView.enumerateAvailableRowViews { rowView, row in
+			for column in 0..<rowView.numberOfColumns {
+				if let cellView = rowView.view(atColumn: column) as? NSView {
+					applyReadFading(to: cellView, row: row)
+				}
+			}
+		}
 	}
 
 	private func makeTimelineCellEmpty(_ cell: TimelineTableCellView) {
@@ -1023,6 +1494,31 @@ extension TimelineViewController: NSTableViewDelegate {
 
 private extension TimelineViewController {
 
+	/// The table doesn’t shrink by itself when the pane narrows after leaving column layout.
+	func fitTableViewToVisibleWidthInStandardLayout() {
+		guard layout == .standard, let scrollView = tableView.enclosingScrollView else {
+			return
+		}
+		let contentInsets = scrollView.contentInsets
+		let visibleWidth = scrollView.contentView.bounds.width - contentInsets.left - contentInsets.right
+		guard visibleWidth > 0, tableView.frame.width != visibleWidth else {
+			return
+		}
+		tableView.setFrameSize(NSSize(width: visibleWidth, height: tableView.frame.height))
+		tableView.sizeLastColumnToFit()
+	}
+
+	/// Returns true if it scrolled. Callers should skip further scrolling then,
+	/// since the animation hasn’t updated the visible rect yet.
+	/// <https://github.com/Ranchero-Software/NetNewsWire/issues/5486>
+	@discardableResult func scrollToRowIfNotFullyVisible(_ row: Int) -> Bool {
+		guard (0..<tableView.numberOfRows).contains(row), !tableView.isRowFullyVisible(row) else {
+			return false
+		}
+		tableView.scrollRowFullyIntoView(row)
+		return true
+	}
+
 	func fetchAndReplacePreservingSelection() {
 		if let article = oneSelectedArticle, let account = article.account {
 			exceptionArticleFetcher = SingleArticleFetcher(account: account, articleID: article.articleID)
@@ -1032,9 +1528,16 @@ private extension TimelineViewController {
 		}
 	}
 
-	@objc func reloadAvailableCells() {
-		if let indexesToReload = tableView.indexesOfAvailableRows() {
-			reloadCells(for: indexesToReload)
+	// The current article should stay in the timeline, and stay selected,
+	// when the timeline updates and the sidebar selection hasn't changed —
+	// even if the new fetch wouldn't otherwise include it.
+	func fetchAndReplacePreservingSelectionAsync() {
+		if let article = oneSelectedArticle, let account = article.account {
+			exceptionArticleFetcher = SingleArticleFetcher(account: account, articleID: article.articleID)
+		}
+		let savedSelection = selectedArticleIDs()
+		fetchAndReplaceArticlesAsync { [weak self] in
+			self?.restoreSelection(savedSelection)
 		}
 	}
 
@@ -1048,15 +1551,37 @@ private extension TimelineViewController {
 		unreadCount = count
 	}
 
-	func queueReloadAvailableCells() {
-		CoalescingQueue.standard.add(self, #selector(reloadAvailableCells))
-	}
-
-	func updateTableViewRowHeight() {
-		tableView.rowHeight = currentRowHeight
+	func layoutDidChange() {
+		rowHeights.removeAll()
+		performBlockAndRestoreSelection {
+			configureTableView(for: layout)
+			updateGridStyle()
+			updateShowIcons()
+			tableView.reloadData()
+		}
+		if tableView.selectedRow != -1 {
+			tableView.scrollRowToVisible(tableView.selectedRow)
+		}
 	}
 
 	func updateShowIcons() {
+		switch AppDefaults.timelineFeedIconsDisplay {
+		case .always:
+			self.showIcons = true
+			return
+		case .never:
+			self.showIcons = false
+			return
+		case .automatic:
+			break
+		}
+
+		if layout == .column {
+			// With Automatic, the Feed column shows the feed icon.
+			self.showIcons = true
+			return
+		}
+
 		if showFeedNames == .feed {
 			self.showIcons = true
 			return
@@ -1156,12 +1681,45 @@ private extension TimelineViewController {
 		return indexes
 	}
 
+	// MARK: - Thumbnails
+
+	/// Updates row heights and visible cells.
+	func thumbnailURLsDidChange(for articleIDs: Set<String>) {
+		guard !articleIDs.isEmpty else {
+			return
+		}
+		if thumbnailMode != nil {
+			remeasureRowHeights(indexesForArticleIDs(articleIDs))
+		}
+		reloadVisibleCells(for: articleIDs)
+	}
+
+	func thumbnailsDisplayDidChange() {
+		updateCellAppearances()
+		rowHeights.removeAll()
+		guard layout == .standard else {
+			return
+		}
+		performBlockAndRestoreSelection {
+			tableView.reloadData()
+		}
+		if tableView.selectedRow != -1 {
+			tableView.scrollRowToVisible(tableView.selectedRow)
+		}
+	}
+
 	// MARK: - Appearance Change
 
-	private func fontSizeDidChange() {
-		cellAppearance = TimelineCellAppearance(showIcon: false, fontSize: fontSize)
-		cellAppearanceWithIcon = TimelineCellAppearance(showIcon: true, fontSize: fontSize)
-		updateRowHeights()
+	private func updateCellAppearances() {
+		let iconSize = AppDefaults.timelineIconSize
+		cellAppearance = TimelineCellAppearance(showIcon: false, textSize: textSize, iconSize: iconSize, numberOfLines: numberOfLines, showsFullTitles: showFullTitles, feedNameAndDateAboveTitle: feedNameAndDateAboveTitle, showsLargeThumbnails: thumbnailsDisplay == .large)
+		cellAppearanceWithIcon = TimelineCellAppearance(showIcon: true, textSize: textSize, iconSize: iconSize, numberOfLines: numberOfLines, showsFullTitles: showFullTitles, feedNameAndDateAboveTitle: feedNameAndDateAboveTitle, showsLargeThumbnails: thumbnailsDisplay == .large)
+	}
+
+	private func cellAppearanceSettingDidChange() {
+		updateCellAppearances()
+		updateEstimatedRowHeight()
+		rowHeights.removeAll()
 		performBlockAndRestoreSelection {
 			tableView.reloadData()
 		}
@@ -1189,7 +1747,7 @@ private extension TimelineViewController {
 		replaceArticles(with: fetchedArticles)
 	}
 
-	func fetchAndReplaceArticlesAsync() {
+	func fetchAndReplaceArticlesAsync(completion: (() -> Void)? = nil) {
 		// To be called when we need to do an entire fetch, but an async delay is okay.
 		// Example: we have the Today feed selected, and the calendar day just changed.
 		cancelPendingAsyncFetches()
@@ -1205,6 +1763,7 @@ private extension TimelineViewController {
 
 		fetchUnsortedArticlesAsync(for: representedObjects) { [weak self] (articles) in
 			self?.replaceArticles(with: articles)
+			completion?()
 		}
 	}
 
@@ -1214,7 +1773,7 @@ private extension TimelineViewController {
 	}
 
 	func replaceArticles(with unsortedArticles: Set<Article>) {
-		articles = Array(unsortedArticles).sortedByDate(sortDirection, groupByFeed: groupByFeed)
+		articles = Array(unsortedArticles).sorted(by: sortParameters)
 	}
 
 	func fetchUnsortedArticlesSync(for representedObjects: [Any]) -> Set<Article> {
@@ -1227,13 +1786,11 @@ private extension TimelineViewController {
 		var fetchedArticles = Set<Article>()
 		for fetchers in fetchers {
 			if (fetchers as? SidebarItem)?.readFiltered(readFilterEnabledTable: readFilterEnabledTable) ?? true {
-				if let articles = try? fetchers.fetchUnreadArticles() {
-					fetchedArticles.formUnion(articles)
-				}
+				let articles = fetchers.fetchUnreadArticles()
+				fetchedArticles.formUnion(articles)
 			} else {
-				if let articles = try? fetchers.fetchArticles() {
-					fetchedArticles.formUnion(articles)
-				}
+				let articles = fetchers.fetchArticles()
+				fetchedArticles.formUnion(articles)
 			}
 		}
 		return fetchedArticles
@@ -1245,7 +1802,7 @@ private extension TimelineViewController {
 		precondition(Thread.isMainThread)
 		cancelPendingAsyncFetches()
 		let fetchers = representedObjects.compactMap { $0 as? ArticleFetcher }
-		let fetchOperation = FetchRequestOperation(id: fetchSerialNumber, readFilterEnabledTable: readFilterEnabledTable, fetchers: fetchers) { [weak self] (articles, operation) in
+		let fetchOperation = FetchRequestOperation(id: fetchSerialNumber, readFilterEnabledTable: readFilterEnabledTable, fetchers: fetchers, findsThumbnailURLs: thumbnailMode != nil) { [weak self] (articles, operation) in
 			precondition(Thread.isMainThread)
 			guard !operation.isCanceled, let strongSelf = self, operation.id == strongSelf.fetchSerialNumber else {
 				return
@@ -1299,6 +1856,20 @@ private extension TimelineViewController {
 
 	func representedObjectsContainAnyFolder() -> Bool {
 		return representedObjects?.contains(where: { $0 is Folder }) ?? false
+	}
+
+	func seedReadFilterForFolders() {
+		guard let representedObjects else {
+			return
+		}
+		for object in representedObjects {
+			guard let folder = object as? Folder, let sidebarItemID = folder.sidebarItemID else {
+				continue
+			}
+			if readFilterEnabledTable[sidebarItemID] == nil {
+				readFilterEnabledTable[sidebarItemID] = true
+			}
+		}
 	}
 
 	func representedObjectsContainsAnyFeed(_ feeds: Set<Feed>) -> Bool {

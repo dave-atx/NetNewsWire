@@ -7,7 +7,7 @@
 //
 
 import Foundation
-import os.log
+import os
 import RSCore
 import RSParser
 import Account
@@ -15,7 +15,7 @@ import Account
 @MainActor final class ExtensionContainersFile {
 	static let shared = ExtensionContainersFile()
 
-	static private let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "ExtensionContainersFile")
+	static private let logger = Logger(subsystem: Logger.nnwSubsystem, category: "ExtensionContainersFile")
 
 	private static var filePath: String = {
 		let appGroup = Bundle.main.object(forInfoDictionaryKey: "AppGroup") as! String

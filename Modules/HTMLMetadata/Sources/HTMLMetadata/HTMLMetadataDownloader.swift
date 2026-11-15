@@ -1,0 +1,216 @@
+//
+//  HTMLMetadataDownloader.swift
+//  HTMLMetadata
+//
+//  Created by Brent Simmons on 11/26/17.
+//  Copyright © 2017 Ranchero Software. All rights reserved.
+//
+
+import Foundation
+import os
+import RSCore
+import RSParser
+import RSWeb
+import Synchronization
+import ActivityLog
+
+nonisolated public final class HTMLMetadataDownloader: Sendable {
+
+	public static let shared = HTMLMetadataDownloader()
+
+	private static let logger = Logger(subsystem: Logger.nnwSubsystem, category: "HTMLMetadataDownloader")
+
+	private static let hoursBetweenAttempts = 3
+
+	private let attemptDates = Mutex([String: Date]())
+
+	/// In-memory mirror so `cachedMetadata(for:)` can answer synchronously.
+	private let cache = Mutex([String: HTMLMetadataRecord]())
+
+	/// Icon lookups ask for metadata on every cell configure, so a URL isn’t looked up again
+	/// while its lookup runs, or after it found nothing, until `cache` is emptied.
+	private let urlsLookedUp = Mutex(Set<String>())
+
+	init() {
+		NotificationCenter.default.addObserver(self, selector: #selector(handleAppDidGoToBackground(_:)), name: .appDidGoToBackground, object: nil)
+		NotificationCenter.default.addObserver(self, selector: #selector(handleLowMemory(_:)), name: .lowMemory, object: nil)
+	}
+
+	@objc func handleAppDidGoToBackground(_ notification: Notification) {
+		emptyCache()
+	}
+
+	@objc func handleLowMemory(_ notification: Notification) {
+		emptyCache()
+	}
+
+	/// Returns cached metadata synchronously, or kicks off a fetch and returns nil.
+	/// Callers re-query after observing `.htmlMetadataAvailable`.
+	public func cachedMetadata(for url: String) -> HTMLMetadataRecord? {
+		if Self.shouldSkipDownloadingMetadata(url) {
+			return nil
+		}
+
+		if let record = cache.withLock({ $0[url] }) {
+			return record
+		}
+
+		fetchAndDownloadIfNeeded(url)
+		return nil
+	}
+
+}
+
+// MARK: - Private
+
+nonisolated private extension HTMLMetadataDownloader {
+
+	private static let specialCasesToSkip = [SpecialCase.rachelByTheBayHostName, SpecialCase.openRSSOrgHostName]
+
+	static func shouldSkipDownloadingMetadata(_ urlString: String) -> Bool {
+		SpecialCase.urlStringContainSpecialCase(urlString, specialCasesToSkip)
+	}
+
+	func emptyCache() {
+		cache.withLock { $0.removeAll() }
+		urlsLookedUp.withLock { $0.removeAll() }
+	}
+
+	func fetchAndDownloadIfNeeded(_ url: String) {
+		guard urlsLookedUp.withLock({ $0.insert(url).inserted }) else {
+			return
+		}
+		Task { @MainActor in
+			if let record = await HTMLMetadataDatabase.shared.cachedRecord(for: url) {
+				cacheRecord(record)
+				postNotification(record)
+				return
+			}
+
+			if await HTMLMetadataDatabase.shared.recentlyFailed(for: url) {
+				return
+			}
+
+			downloadMetadataIfNeeded(url)
+		}
+	}
+
+	/// A redirect between `example.com` and `www.example.com` stays on the same host.
+	static func isRedirectToAnotherHost(from url: URL, to responseURL: URL) -> Bool {
+		guard let host = hostIgnoringWWW(url), let responseHost = hostIgnoringWWW(responseURL) else {
+			return false
+		}
+		return host != responseHost
+	}
+
+	static func hostIgnoringWWW(_ url: URL) -> String? {
+		guard let host = url.host()?.lowercased() else {
+			return nil
+		}
+		return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+	}
+
+	/// Off the main thread, since a home page can be a few megabytes.
+	@concurrent static func parseRecord(url: String, parserData: ParserData) async -> HTMLMetadataRecord {
+		HTMLMetadataRecord(url: url, metadata: HTMLMetadataParser.htmlMetadata(with: parserData))
+	}
+
+	func cacheRecord(_ record: HTMLMetadataRecord) {
+		cache.withLock { $0[record.url] = record }
+	}
+
+	func downloadMetadataIfNeeded(_ url: String) {
+		let shouldDownload = attemptDates.withLock { dates in
+			let currentDate = Date()
+			if let attemptDate = dates[url], attemptDate > currentDate.bySubtracting(hours: Self.hoursBetweenAttempts) {
+				return false
+			}
+			dates[url] = currentDate
+			return true
+		}
+
+		if shouldDownload {
+			downloadMetadata(url)
+		}
+	}
+
+	func downloadMetadata(_ url: String) {
+		guard let actualURL = URL(string: url) else {
+			return
+		}
+
+		Task { @MainActor in
+			let activityLog = ActivityLog.shared
+			let kind = ActivityKind.downloadHTMLMetadata(urlString: url)
+
+			let lastDownloadDate = await HTMLMetadataDatabase.shared.lastDownloadDate(for: url)
+			let detail = lastDownloadDate.map { DateFormatter.logTimestamp.string(from: $0) }
+
+			activityLog.createActivity(owner: .htmlMetadataDownloader, kind: kind, detail: detail)
+			activityLog.didStart(.htmlMetadataDownloader, kind: kind)
+
+			do {
+				let downloadResponse = try await Downloader.shared.download(actualURL, userAgentStyle: .browser)
+
+				// A captive portal’s login page would give the home page the portal’s icons.
+				// Only http is checked, since a portal can’t redirect https without a certificate error.
+				if actualURL.scheme?.lowercased() == "http", let responseURL = downloadResponse.response?.url, Self.isRedirectToAnotherHost(from: actualURL, to: responseURL) {
+					await returnStaleCacheIfAvailable(url)
+					let userInfo = [NSLocalizedDescriptionKey: "Redirected to \(responseURL.host() ?? responseURL.absoluteString)"]
+					activityLog.didFail(.htmlMetadataDownloader, kind: kind, error: NSError(domain: "NetNewsWire", code: -1, userInfo: userInfo))
+					return
+				}
+
+				if let data = downloadResponse.data, !data.isEmpty, let response = downloadResponse.response, response.statusIsOK {
+					let urlToUse = response.url ?? actualURL
+					let parserData = ParserData(url: urlToUse.absoluteString, data: data)
+					let record = await Self.parseRecord(url: url, parserData: parserData)
+
+					let statusCode = response.forcedStatusCode
+					await HTMLMetadataDatabase.shared.save(record, statusCode: statusCode)
+					cacheRecord(record)
+					postNotification(record)
+
+					activityLog.didComplete(.htmlMetadataDownloader, kind: kind, message: ActivityLog.dataSizeMessage(data), returnedFromCache: downloadResponse.returnedFromCache)
+					return
+				}
+
+				let statusCode = downloadResponse.response?.forcedStatusCode ?? -1
+				if (400...499).contains(statusCode) {
+					await HTMLMetadataDatabase.shared.noteFailure(url: url, statusCode: statusCode)
+				}
+
+				// Download failed — try returning stale cached data.
+				await returnStaleCacheIfAvailable(url)
+
+				let userInfo = [NSLocalizedDescriptionKey: "HTTP \(statusCode)"]
+				let statusError = NSError(domain: "NetNewsWire", code: statusCode, userInfo: userInfo)
+				activityLog.didFail(.htmlMetadataDownloader, kind: kind, error: statusError)
+
+			} catch {
+				// Pre-response failure (DNS, TLS, network).
+				await HTMLMetadataDatabase.shared.noteTransientFailure(url: url)
+				await returnStaleCacheIfAvailable(url)
+
+				activityLog.didFail(.htmlMetadataDownloader, kind: kind, error: error)
+			}
+		}
+	}
+
+	func postNotification(_ record: HTMLMetadataRecord) {
+		let userInfo: [String: Any] = [
+			HTMLMetadataUserInfoKey.record: record,
+			HTMLMetadataUserInfoKey.url: record.url
+		]
+		NotificationCenter.default.postOnMainThread(
+			name: .htmlMetadataAvailable, object: self, userInfo: userInfo
+		)
+	}
+
+	@MainActor func returnStaleCacheIfAvailable(_ url: String) async {
+		if let record = await HTMLMetadataDatabase.shared.staleCachedRecord(for: url) {
+			cacheRecord(record)
+			postNotification(record)
+		}
+	}
+}

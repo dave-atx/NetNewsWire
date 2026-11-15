@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
 	name: "Secrets",
-	platforms: [.macOS(.v26), .iOS(.v26)],
+	platforms: [.macOS(.v15), .iOS(.v18)],
 	products: [
 		.library(
 			name: "Secrets",
@@ -11,11 +11,17 @@ let package = Package(
 			targets: ["Secrets"]
 		)
 	],
-	dependencies: [],
+	dependencies: [
+		.package(path: "../ErrorLog"),
+		.package(path: "../RSCore")
+	],
 	targets: [
 		.target(
 			name: "Secrets",
-			dependencies: [],
+			dependencies: [
+				"ErrorLog",
+				"RSCore"
+			],
 			exclude: ["SecretKey.swift.gyb"],
 			swiftSettings: [
 				.enableUpcomingFeature("NonisolatedNonsendingByDefault"),

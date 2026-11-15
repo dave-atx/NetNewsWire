@@ -10,6 +10,7 @@ import Foundation
 import RSCore
 import Account
 import RSTree
+import Images
 
 final class SidebarCell: NSTableCellView {
 
@@ -43,8 +44,7 @@ final class SidebarCell: NSTableCellView {
 		set {
 			if unreadCountView.unreadCount != newValue {
 				unreadCountView.unreadCount = newValue
-				unreadCountView.isHidden = (newValue < 1)
-				needsLayout = true
+				updateUnreadCountView()
 			}
 		}
 	}
@@ -82,7 +82,7 @@ final class SidebarCell: NSTableCellView {
 		}
 	}
 
-	override var isFlipped: Bool {
+	nonisolated override var isFlipped: Bool {
 		return true
 	}
 
@@ -111,13 +111,18 @@ final class SidebarCell: NSTableCellView {
 		layoutWith(layout)
 	}
 
+	func updateUnreadCountView() {
+		unreadCountView.invalidateIntrinsicContentSize()
+		unreadCountView.needsDisplay = true
+		unreadCountView.isHidden = unreadCountView.unreadCountText == nil
+		needsLayout = true
+	}
+
 	override func accessibilityLabel() -> String? {
-		if unreadCount > 0 {
-			let unreadLabel = NSLocalizedString("unread", comment: "Unread label for accessibility")
-			return "\(name) \(unreadCount) \(unreadLabel)"
-		} else {
+		guard let unreadText = AppDefaults.unreadCountDisplay.accessibilityText(for: unreadCount) else {
 			return name
 		}
+		return "\(name) \(unreadText)"
 	}
 }
 
@@ -135,23 +140,23 @@ private extension SidebarCell {
 	}
 
 	func layoutWith(_ layout: SidebarCellLayout) {
-		faviconImageView.setFrame(ifNotEqualTo: layout.faviconRect)
-		titleView.setFrame(ifNotEqualTo: layout.titleRect)
-		unreadCountView.setFrame(ifNotEqualTo: layout.unreadCountRect)
+		faviconImageView.setFrameIfNotEqual(layout.faviconRect)
+		titleView.setFrameIfNotEqual(layout.titleRect)
+		unreadCountView.setFrameIfNotEqual(layout.unreadCountRect)
 	}
 
 	func updateFaviconImage() {
 		var updatedIconImage = iconImage
 
 		if let iconImage = iconImage, iconImage.isSymbol {
-			var tintColor: CGColor
+			var tintColor: NSColor
 			if backgroundStyle != .normal {
-				tintColor = NSColor.white.cgColor
+				tintColor = NSColor.white
 			} else {
 				if let preferredColor = iconImage.preferredColor {
 					tintColor = preferredColor
 				} else {
-					tintColor = NSColor.controlAccentColor.cgColor
+					tintColor = NSColor.controlAccentColor
 				}
 			}
 			updatedIconImage = IconImage(iconImage.image, isSymbol: iconImage.isSymbol, isBackgroundSuppressed: iconImage.isBackgroundSuppressed, preferredColor: tintColor)

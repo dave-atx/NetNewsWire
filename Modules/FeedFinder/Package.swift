@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
 	name: "FeedFinder",
-	platforms: [.macOS(.v26), .iOS(.v26)],
+	platforms: [.macOS(.v15), .iOS(.v18)],
 	products: [
 		.library(
 			name: "FeedFinder",
@@ -13,7 +13,8 @@ let package = Package(
 	dependencies: [
 		.package(path: "../RSWeb"),
 		.package(path: "../RSParser"),
-		.package(path: "../RSCore")
+		.package(path: "../RSCore"),
+		.package(path: "../ActivityLog")
 	],
 	targets: [
 		.target(
@@ -21,7 +22,8 @@ let package = Package(
 			dependencies: [
 				"RSWeb",
 				"RSParser",
-				"RSCore"
+				"RSCore",
+				"ActivityLog"
 			],
 			swiftSettings: [
 				.enableUpcomingFeature("NonisolatedNonsendingByDefault"),

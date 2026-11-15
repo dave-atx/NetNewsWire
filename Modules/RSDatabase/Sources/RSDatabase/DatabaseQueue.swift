@@ -7,86 +7,34 @@
 //
 
 import Foundation
-import Synchronization
 import os
 import SQLite3
 import RSDatabaseObjC
 
+/// DELETE avoids the extra -wal and -shm files. WAL makes frequent small writes faster.
+public enum JournalMode: String, Sendable {
+	case delete = "DELETE"
+	case wal = "WAL"
+}
+
 /// Manage a serial queue and a SQLite database.
-///
-/// On iOS, the queue can be suspended
-/// in order to support background refreshing.
 public final class DatabaseQueue: Sendable {
-	private struct State {
-		var isCallingDatabase = false
-		var isSuspended = false
-		let database: FMDatabase
 
-		init(_ database: FMDatabase) {
-			self.database = database
-		}
-	}
-
-	private let state: Mutex<State>
+	nonisolated(unsafe) private let database: FMDatabase // Used on serial dispatch queue only
 	private let databasePath: String
 	private let serialDispatchQueue: DispatchQueue
 
-	private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "DatabaseQueue")
+	private static let logger = Logger(subsystem: logSubsystem, category: "DatabaseQueue")
 
-	public init(databasePath: String) {
+	public init(databasePath: String, journalMode: JournalMode = .delete) {
 		Self.logger.debug("DatabaseQueue: creating with database path \(databasePath)")
 
 		self.serialDispatchQueue = DispatchQueue(label: "DatabaseQueue (Serial) - \(databasePath)")
 
 		self.databasePath = databasePath
-		let database = FMDatabase(path: databasePath)!
-		self.state = Mutex(State(database))
+		self.database = FMDatabase(path: databasePath)!
 
-		self.state.withLock { openDatabase($0.database) }
-	}
-
-	// MARK: - Suspend and Resume
-
-	/// Close the SQLite database and don’t allow database calls until resumed.
-	/// This is for iOS, where we need to close the SQLite database in some conditions.
-	///
-	/// After calling suspend, if you call into the database before calling resume,
-	/// your code will not run, and runInDatabaseSync and runInTransactionSync will
-	/// both throw DatabaseQueueError.isSuspended.
-	///
-	/// On Mac, suspend() and resume() are no-ops, since there isn’t a need for them.
-	public func suspend() {
-		#if os(iOS)
-		Self.logger.info("DatabaseQueue: suspending")
-		state.withLock { state in
-			guard !state.isSuspended else {
-				assertionFailure("DatabaseQueue: suspend called when already suspended")
-				return
-			}
-
-			state.isSuspended = true
-			serialDispatchQueue.suspend()
-			state.database.close()
-		}
-		#endif
-	}
-
-	/// Open the SQLite database. Allow database calls again.
-	/// iOS only — does nothing on macOS.
-	public func resume() {
-		#if os(iOS)
-		Self.logger.info("DatabaseQueue: resuming")
-		state.withLock { state in
-			guard state.isSuspended else {
-				assertionFailure("DatabaseQueue: resume called when already resumed")
-				return
-			}
-
-			state.isSuspended = false
-			openDatabase(state.database)
-			serialDispatchQueue.resume()
-		}
-		#endif
+		openDatabase(database, journalMode: journalMode)
 	}
 
 	// MARK: - Make Database Calls
@@ -94,21 +42,17 @@ public final class DatabaseQueue: Sendable {
 	/// Run a DatabaseBlock synchronously. This call will block the main thread
 	/// potentially for a while, depending on how long it takes to execute
 	/// the DatabaseBlock *and* depending on how many other calls have been
-	/// scheduled on the queue. Use sparingly — prefer async versions.
+	/// scheduled on the queue. Use sparingly — prefer async versions.
 	public func runInDatabaseSync(_ databaseBlock: DatabaseBlock) {
 		serialDispatchQueue.sync {
-			self.state.withLock { state in
-				self._runInDatabase(&state, databaseBlock, false)
-			}
+			self._runInDatabase(databaseBlock, false)
 		}
 	}
 
 	/// Run a DatabaseBlock asynchronously.
 	public func runInDatabase(_ databaseBlock: @escaping DatabaseBlock) {
 		serialDispatchQueue.async {
-			self.state.withLock { state in
-				self._runInDatabase(&state, databaseBlock, false)
-			}
+			self._runInDatabase(databaseBlock, false)
 		}
 	}
 
@@ -118,9 +62,7 @@ public final class DatabaseQueue: Sendable {
 	/// prefer the async `runInTransaction` instead.
 	public func runInTransactionSync(_ databaseBlock: @escaping DatabaseBlock) {
 		serialDispatchQueue.sync {
-			self.state.withLock { state in
-				self._runInDatabase(&state, databaseBlock, true)
-			}
+			self._runInDatabase(databaseBlock, true)
 		}
 	}
 
@@ -128,106 +70,69 @@ public final class DatabaseQueue: Sendable {
 	/// Transactions help performance significantly when updating the database.
 	public func runInTransaction(_ databaseBlock: @escaping DatabaseBlock) {
 		serialDispatchQueue.async {
-			self.state.withLock { state in
-				self._runInDatabase(&state, databaseBlock, true)
-			}
+			self._runInDatabase(databaseBlock, true)
 		}
 	}
 
 	/// Run all the lines that start with "create".
 	/// Use this to create tables, indexes, etc.
-	public func runCreateStatements(_ statements: String) throws {
-		nonisolated(unsafe) var error: DatabaseError?
-
-		runInDatabaseSync { result in
+	public func runCreateStatements(_ statements: String) {
+		runInDatabaseSync { database in
 			Self.logger.debug("DatabaseQueue: runCreateStatements")
 
-			switch result {
-			case .success(let database):
-				statements.enumerateLines { (line, stop) in
-					if line.lowercased().hasPrefix("create") {
-						database.executeStatements(line)
-					}
-					stop = false
+			statements.enumerateLines { (line, stop) in
+				if line.lowercased().hasPrefix("create") {
+					database.executeStatements(line)
 				}
-			case .failure(let databaseError):
-				error = databaseError
+				stop = false
 			}
-		}
-
-		if let error {
-			throw(error)
 		}
 	}
 
 	/// Compact the database. This should be done from time to time —
 	/// weekly-ish? — to keep up the performance level of a database.
 	/// Generally a thing to do at startup, if it’s been a while
-	/// since the last vacuum() call. You almost certainly want to call
-	/// vacuumIfNeeded instead.
-	public func vacuum() {
-		runInDatabase { result in
-			Self.logger.debug("DatabaseQueue: vacuum")
-			guard let database = try? result.get() else {
-				return
+	/// since the last vacuum() call.
+	public func vacuum() async {
+		await withCheckedContinuation { continuation in
+			runInDatabase { database in
+				database.vacuum()
+				continuation.resume()
 			}
-			database.executeStatements("vacuum;")
 		}
 	}
 
-	/// Vacuum the database if it’s been more than `daysBetweenVacuums` since the last vacuum.
-	/// Normally you would call this right after initing a DatabaseQueue.
-	///
-	/// - Returns: true if database will be vacuumed.
-	@discardableResult
-	public func vacuumIfNeeded(daysBetweenVacuums: Int) -> Bool {
-		let defaultsKey = "DatabaseQueue-LastVacuumDate-\(databasePath)"
-		let minimumVacuumInterval = TimeInterval(daysBetweenVacuums * (60 * 60 * 24)) // Doesn’t have to be precise
-		let now = Date()
-		let cutoffDate = now - minimumVacuumInterval
-		if let lastVacuumDate = UserDefaults.standard.object(forKey: defaultsKey) as? Date {
-			if lastVacuumDate < cutoffDate {
-				vacuum()
-				UserDefaults.standard.set(now, forKey: defaultsKey)
-				return true
+	/// Copy the WAL into the database and truncate the -wal file.
+	/// For WAL-mode databases, this takes the place of vacuum().
+	public func checkpoint() async {
+		await withCheckedContinuation { continuation in
+			runInDatabase { database in
+				database.checkpoint()
+				continuation.resume()
 			}
-			return false
 		}
-
-		// Never vacuumed — almost certainly a new database.
-		// Just set the LastVacuumDate pref to now and skip vacuuming.
-		UserDefaults.standard.set(now, forKey: defaultsKey)
-		return false
 	}
 }
 
 private extension DatabaseQueue {
 
-	private func _runInDatabase(_ state: inout State, _ databaseBlock: DatabaseBlock, _ useTransaction: Bool) {
-		precondition(!state.isCallingDatabase)
-
-		state.isCallingDatabase = true
-		defer {
-			state.isCallingDatabase = false
-		}
+	private func _runInDatabase(_ databaseBlock: DatabaseBlock, _ useTransaction: Bool) {
+		dispatchPrecondition(condition: .onQueue(serialDispatchQueue))
 
 		autoreleasepool {
-			if state.isSuspended {
-				databaseBlock(.failure(.isSuspended))
-			} else {
-				if useTransaction {
-					state.database.beginTransaction()
-				}
-				databaseBlock(.success(state.database))
-				if useTransaction {
-					state.database.commit()
-				}
+			if useTransaction {
+				database.beginTransaction()
+			}
+			databaseBlock(database)
+			if useTransaction {
+				database.commit()
 			}
 		}
 	}
 
-	func openDatabase(_ database: FMDatabase) {
+	func openDatabase(_ database: FMDatabase, journalMode: JournalMode) {
 		database.open()
+		database.executeStatements("PRAGMA journal_mode = \(journalMode.rawValue);")
 		database.executeStatements("PRAGMA synchronous = 1;")
 		database.setShouldCacheStatements(true)
 	}

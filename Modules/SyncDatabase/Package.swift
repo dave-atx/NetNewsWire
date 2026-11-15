@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
 	name: "SyncDatabase",
-	platforms: [.macOS(.v26), .iOS(.v26)],
+	platforms: [.macOS(.v15), .iOS(.v18)],
 	products: [
 		.library(
 			name: "SyncDatabase",
@@ -27,6 +27,16 @@ let package = Package(
 				.enableUpcomingFeature("NonisolatedNonsendingByDefault"),
 				.enableUpcomingFeature("InferIsolatedConformances"),
 				.unsafeFlags(["-warnings-as-errors"])
+			]
+		),
+		.testTarget(
+			name: "SyncDatabaseTests",
+			dependencies: [
+				"SyncDatabase"
+			],
+			swiftSettings: [
+				.enableUpcomingFeature("NonisolatedNonsendingByDefault"),
+				.enableUpcomingFeature("InferIsolatedConformances")
 			]
 		)
 	]

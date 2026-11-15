@@ -12,7 +12,7 @@ import RSTree
 
 final class SidebarOutlineView: NSOutlineView {
 
-	@IBOutlet var keyboardDelegate: KeyboardDelegate!
+	weak var keyboardDelegate: KeyboardDelegate?
 
 	// MARK: NSTableView
 
@@ -37,29 +37,11 @@ final class SidebarOutlineView: NSOutlineView {
 		return frame
 	}
 
-	// MARK: NSView
-
-	override func viewWillStartLiveResize() {
-
-		if let scrollView = self.enclosingScrollView {
-			scrollView.hasVerticalScroller = false
-		}
-		super.viewWillStartLiveResize()
-	}
-
-	override func viewDidEndLiveResize() {
-
-		if let scrollView = self.enclosingScrollView {
-			scrollView.hasVerticalScroller = true
-		}
-		super.viewDidEndLiveResize()
-	}
-
 	// MARK: NSResponder
 
 	override func keyDown(with event: NSEvent) {
 
-		if keyboardDelegate.keydown(event, in: self) {
+		if keyboardDelegate?.keydown(event, in: self) ?? false {
 			return
 		}
 

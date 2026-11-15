@@ -14,6 +14,7 @@ import Account
 import Articles
 import Intents
 import UniformTypeIdentifiers
+import Images
 
 @MainActor final class ActivityManager {
 
@@ -21,6 +22,7 @@ import UniformTypeIdentifiers
 	private var selectingActivity: NSUserActivity?
 	private var readingActivity: NSUserActivity?
 	private var readingArticle: Article?
+	private var browsingActivity: NSUserActivity?
 
 	#if os(macOS)
 	var stateRestorationActivity: NSUserActivity {
@@ -39,24 +41,42 @@ import UniformTypeIdentifiers
 	}
 	#else // iOS
 	var stateRestorationActivity: NSUserActivity {
-		// State restoration is now handled via UserDefaults (AppDefaults.selectedSidebarItem and AppDefaults.selectedArticle).
-		// The reading/selecting activities are still maintained for Handoff, Spotlight, and Siri Shortcuts,
-		// but we don't use them for same-device state restoration anymore.
+		// State restoration uses UserDefaults; this activity is left non-current so it doesn't displace
+		// the reading/selecting activity that Handoff advertises.
+		// <https://github.com/Ranchero-Software/NetNewsWire/issues/5368>
 		let activity = NSUserActivity(activityType: ActivityType.restoration.rawValue)
 		activity.persistentIdentifier = UUID().uuidString
-		activity.becomeCurrent()
 		return activity
 	}
 	#endif
 
 	init() {
-		NotificationCenter.default.addObserver(self, selector: #selector(feedIconDidBecomeAvailable(_:)), name: .feedIconDidBecomeAvailable, object: nil)
+		NotificationCenter.default.addObserver(self, selector: #selector(handleFeedIconImageDidChange(_:)), name: .feedIconImageDidChange, object: nil)
 	}
 
 	func invalidateCurrentActivities() {
+		invalidateBrowsing()
 		invalidateReading()
 		invalidateSelecting()
 		invalidateNextUnread()
+	}
+
+	// Handoff advertises the in-app browser's page, not the article behind it.
+	// <https://github.com/Ranchero-Software/NetNewsWire/issues/5369>
+	func browsing(url: URL) {
+		browsingActivity?.invalidate()
+
+		let activity = NSUserActivity(activityType: NSUserActivityTypeBrowsingWeb)
+		activity.webpageURL = url
+		activity.isEligibleForHandoff = true
+		browsingActivity = activity
+		activity.becomeCurrent()
+	}
+
+	func invalidateBrowsing() {
+		browsingActivity?.invalidate()
+		browsingActivity = nil
+		readingActivity?.becomeCurrent()
 	}
 
 	func selecting(sidebarItem: SidebarItem) {
@@ -98,6 +118,7 @@ import UniformTypeIdentifiers
 	}
 
 	func reading(feed: SidebarItem?, article: Article?) {
+		invalidateBrowsing()
 		invalidateReading()
 		invalidateNextUnread()
 
@@ -150,8 +171,8 @@ import UniformTypeIdentifiers
 	}
 	#endif
 
-	@objc func feedIconDidBecomeAvailable(_ note: Notification) {
-		guard let feed = note.userInfo?[UserInfoKey.feed] as? Feed, let activityFeedId = selectingActivity?.userInfo?[ArticlePathKey.feedID] as? String else {
+	@objc func handleFeedIconImageDidChange(_ notification: Notification) {
+		guard let feed = notification.userInfo?[UserInfoKey.feed] as? Feed, let activityFeedId = selectingActivity?.userInfo?[ArticlePathKey.feedID] as? String else {
 			return
 		}
 
@@ -199,7 +220,7 @@ import UniformTypeIdentifiers
 
 	func makeReadArticleActivity(sidebarItem: SidebarItem?, article: Article) -> NSUserActivity {
 		let activity = NSUserActivity(activityType: ActivityType.readArticle.rawValue)
-		activity.title = ArticleStringFormatter.truncatedTitle(article)
+		activity.title = ArticleStringFormatter.shared.truncatedTitle(article)
 
 		if let sidebarItem {
 			let articleFetcherIdentifierUserInfo = sidebarItem.sidebarItemID?.userInfo ?? [AnyHashable: Any]()
@@ -230,7 +251,7 @@ import UniformTypeIdentifiers
 	func updateReadArticleSearchAttributes(with article: Article) {
 
 		let attributeSet = CSSearchableItemAttributeSet(itemContentType: UTType.compositeContent.identifier)
-		attributeSet.title = ArticleStringFormatter.truncatedTitle(article)
+		attributeSet.title = ArticleStringFormatter.shared.truncatedTitle(article)
 		attributeSet.contentDescription = article.summary
 		attributeSet.keywords = makeKeywords(article)
 		attributeSet.relatedUniqueIdentifier = ActivityManager.identifier(for: article)
@@ -247,7 +268,7 @@ import UniformTypeIdentifiers
 
 	func makeKeywords(_ article: Article) -> [String] {
 		let feedNameKeywords = makeKeywords(article.feed?.nameForDisplay)
-		let articleTitleKeywords = makeKeywords(ArticleStringFormatter.truncatedTitle(article))
+		let articleTitleKeywords = makeKeywords(ArticleStringFormatter.shared.truncatedTitle(article))
 		return feedNameKeywords + articleTitleKeywords
 	}
 
@@ -299,10 +320,9 @@ import UniformTypeIdentifiers
 	static func identifiers(for feed: Feed) -> [String] {
 		var ids = [String]()
 		ids.append(identifier(for: feed))
-		if let articles = try? feed.fetchArticles() {
-			for article in articles {
-				ids.append(identifier(for: article))
-			}
+		let articles = feed.fetchArticles()
+		for article in articles {
+			ids.append(identifier(for: article))
 		}
 
 		return ids

@@ -7,6 +7,7 @@
 
 import Foundation
 import RSDatabaseObjC
+import os
 
 public extension FMDatabase {
 
@@ -14,44 +15,62 @@ public extension FMDatabase {
 		let database = FMDatabase(path: path)!
 
 		database.open()
+		database.executeStatements("PRAGMA journal_mode = DELETE;")
 		database.executeStatements("PRAGMA synchronous = 1;")
 		database.setShouldCacheStatements(true)
 
 		return database
 	}
 
-	func executeUpdateInTransaction(_ sql: String, withArgumentsIn parameters: [Any]? = nil) {
+	/// Returns false if the update failed and the transaction was rolled back.
+	@discardableResult
+	func executeUpdateInTransaction(_ sql: String, withArgumentsIn parameters: [Any]? = nil) -> Bool {
 		beginTransaction()
 		guard executeUpdate(sql, withArgumentsIn: parameters) else {
+			// Capture the error before rollback() overwrites the last-error state.
+			let code = lastErrorCode()
+			let message = lastErrorMessage() ?? "unknown"
+			let path = databasePath() ?? "unknown"
 			rollback()
-			return
+			Self.logger.error("Update failed on \(path, privacy: .public) — SQLite \(code, privacy: .public): \(message, privacy: .public)")
+			return false
 		}
-		commit()
+		return commit()
 	}
 
-	/// Vacuum the database if it’s been more than `daysBetweenVacuums` since the last vacuum.
-	/// Call this as part of an init method.
-	func vacuumIfNeeded(daysBetweenVacuums: Int, filepath: String) {
-		let defaultsKey = "FMDatabase-LastVacuumDate-\(filepath)"
-		let now = Date()
-
-		guard let lastVacuumDate = UserDefaults.standard.object(forKey: defaultsKey) as? Date else {
-			// Never vacuumed — probably a new database.
-			// Set the LastVacuumDate pref to now and skip vacuuming.
-			UserDefaults.standard.set(now, forKey: defaultsKey)
-			return
-		}
-
-		let minimumVacuumInterval = TimeInterval(daysBetweenVacuums * (60 * 60 * 24)) // Doesn’t have to be precise
-		let cutoffDate = now - minimumVacuumInterval
-		if lastVacuumDate < cutoffDate {
-			vacuum()
-			UserDefaults.standard.set(now, forKey: defaultsKey)
-		}
-	}
+	private static let logger = Logger(subsystem: logSubsystem, category: "FMDatabase")
 
 	func vacuum() {
+		let path = databasePath() ?? "unknown"
+		let start = Date()
 		executeStatements("vacuum;")
+		let duration = Date().timeIntervalSince(start)
+		Self.logger.debug("VACUUM \(path, privacy: .public) took \(duration, format: .fixed(precision: 4), privacy: .public) seconds")
+	}
+
+	/// Copy the WAL into the database and truncate the -wal file.
+	func checkpoint() {
+		let path = databasePath() ?? "unknown"
+		let start = Date()
+		executeStatements("PRAGMA wal_checkpoint(TRUNCATE);")
+		let duration = Date().timeIntervalSince(start)
+		Self.logger.debug("Checkpoint \(path, privacy: .public) took \(duration, format: .fixed(precision: 4), privacy: .public) seconds")
+	}
+
+	/// Vacuum if at least `daysBetweenVacuums` have passed since last time.
+	/// The last vacuum date is stored in the database.
+	func vacuumIfNeeded(daysBetweenVacuums: Int = RSDatabaseInfoTable.defaultDaysBetweenVacuums) {
+		RSDatabaseInfoTable.createTableIfNeeded(database: self)
+
+		if let lastVacuumDate = RSDatabaseInfoTable.lastVacuumDate(database: self) {
+			let secondsBetweenVacuums = TimeInterval(daysBetweenVacuums) * 24 * 60 * 60
+			if Date().timeIntervalSince(lastVacuumDate) < secondsBetweenVacuums {
+				return
+			}
+		}
+
+		vacuum()
+		RSDatabaseInfoTable.setLastVacuumDate(Date(), database: self)
 	}
 
 	func runCreateStatements(_ statements: String) {
@@ -63,13 +82,20 @@ public extension FMDatabase {
 		}
 	}
 
-	func insertRows(_ dictionaries: [DatabaseDictionary], insertType: RSDatabaseInsertType, tableName: String) {
+	/// Returns false if any row failed to insert. Every row is attempted either way.
+	@discardableResult
+	func insertRows(_ dictionaries: [DatabaseDictionary], insertType: RSDatabaseInsertType, tableName: String) -> Bool {
+		var didInsertAllRows = true
 		for dictionary in dictionaries {
-			insertRow(dictionary, insertType: insertType, tableName: tableName)
+			if !insertRow(dictionary, insertType: insertType, tableName: tableName) {
+				didInsertAllRows = false
+			}
 		}
+		return didInsertAllRows
 	}
 
-	func insertRow(_ dictionary: DatabaseDictionary, insertType: RSDatabaseInsertType, tableName: String) {
+	@discardableResult
+	func insertRow(_ dictionary: DatabaseDictionary, insertType: RSDatabaseInsertType, tableName: String) -> Bool {
 		rs_insertRow(with: dictionary, insertType: insertType, tableName: tableName)
 	}
 
@@ -87,6 +113,10 @@ public extension FMDatabase {
 
 	func deleteRowsWhere(key: String, equalsAnyValue values: [Any], tableName: String) {
 		rs_deleteRowsWhereKey(key, inValues: values, tableName: tableName)
+	}
+
+	func deleteRowsWhere(key: String, equals value: Any, tableName: String) {
+		rs_deleteRowsWhereKey(key, equalsValue: value, tableName: tableName)
 	}
 
 	func selectRowsWhere(key: String, equalsAnyValue values: [Any], tableName: String) -> FMResultSet? {

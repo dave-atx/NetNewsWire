@@ -33,6 +33,8 @@ final class ArticleViewController: UIViewController {
 	private var defaultControls: [UIBarButtonItem]?
 
 	private var pageViewController: UIPageViewController!
+	private var isPageTransitionInProgress = false
+	private var pendingSetViewController: WebViewController?
 
 	private var currentWebViewController: WebViewController? {
 		return pageViewController?.viewControllers?.first as? WebViewController
@@ -42,28 +44,57 @@ final class ArticleViewController: UIViewController {
 		let button = ArticleExtractorButton(type: .system)
 		button.frame = CGRect(x: 0, y: 0, width: 44.0, height: 44.0)
 		button.setImage(Assets.Images.articleExtractorOff, for: .normal)
-		button.tintColor = .label
+		if #unavailable(iOS 26) {
+			button.tintColor = Assets.Colors.primaryAccent
+		} else {
+			button.tintColor = .label
+		}
 		return button
 	}()
+
+	private let fullScreenTapZone = UIView()
 
 	weak var coordinator: SceneCoordinator!
 
 	private let poppableDelegate = PoppableGestureRecognizerDelegate()
-	private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "ArticleViewController")
+	private weak var originalPopGestureRecognizerDelegate: UIGestureRecognizerDelegate?
+	private static let logger = Logger(subsystem: Logger.nnwSubsystem, category: "ArticleViewController")
+	private static let searchBarSpacing: CGFloat = 8
 
 	var article: Article? {
 		didSet {
 			Self.logger.debug("ArticleViewController: article didSet: \(self.article?.accountID ?? "nil") \(self.article?.articleID ?? "nil") \(self.article?.title ?? "nil")")
 
+			if oldValue != article {
+				// The launch-restoration scroll position belongs only to the restored article.
+				// <https://github.com/Ranchero-Software/NetNewsWire/issues/5243>
+				restoreScrollPosition = nil
+			}
+
 			if let controller = currentWebViewController, controller.article != article {
 				controller.setArticle(article)
-				DispatchQueue.main.async {
-					// You have to set the view controller to clear out the UIPageViewController child controller cache.
-					// You also have to do it in an async call or you will get a strange assertion error.
-					self.pageViewController.setViewControllers([controller], direction: .forward, animated: false, completion: nil)
+				if isPageTransitionInProgress {
+					// Calling setViewControllers during an active page transition trips a UIPageViewController
+					// internal assertion (NSInternalInconsistencyException) and crashes the app. Stash the
+					// controller and flush it from didFinishAnimating once the transition has ended.
+					pendingSetViewController = controller
+				} else {
+					DispatchQueue.main.async {
+						// You have to set the view controller to clear out the UIPageViewController child controller cache.
+						// You also have to do it in an async call or you will get a strange assertion error.
+						// Re-check the transition state: a user swipe between enqueue and execution can flip
+						// isPageTransitionInProgress to true, and calling setViewControllers then would crash.
+						if self.isPageTransitionInProgress {
+							self.pendingSetViewController = controller
+						} else {
+							self.pageViewController.setViewControllers([controller], direction: .forward, animated: false, completion: nil)
+							self.syncArticleExtractorButtonState()
+						}
+					}
 				}
 			}
 			updateUI()
+			syncArticleExtractorButtonState()
 		}
 	}
 
@@ -89,6 +120,9 @@ final class ArticleViewController: UIViewController {
 	override var keyCommands: [UIKeyCommand]? {
 		return keyboardManager.keyCommands
 	}
+	override var canBecomeFirstResponder: Bool {
+		true
+	}
 
 	override func viewDidLoad() {
 		super.viewDidLoad()
@@ -96,27 +130,63 @@ final class ArticleViewController: UIViewController {
 		NotificationCenter.default.addObserver(self, selector: #selector(unreadCountDidChange(_:)), name: .UnreadCountDidChange, object: nil)
 		NotificationCenter.default.addObserver(self, selector: #selector(statusesDidChange(_:)), name: .StatusesDidChange, object: nil)
 		NotificationCenter.default.addObserver(self, selector: #selector(contentSizeCategoryDidChange(_:)), name: UIContentSizeCategory.didChangeNotification, object: nil)
+		NotificationCenter.default.addObserver(self, selector: #selector(handleArticleSwipeNavigationEnabledDidChange(_:)), name: .articleSwipeNavigationEnabledDidChange, object: nil)
 		NotificationCenter.default.addObserver(self, selector: #selector(willEnterForeground(_:)), name: UIApplication.willEnterForegroundNotification, object: nil)
 
-		let fullScreenTapZone = UIView()
+		let appearance = UINavigationBarAppearance()
+		appearance.configureWithDefaultBackground()
+		navigationItem.standardAppearance = appearance
+		navigationItem.scrollEdgeAppearance = appearance
+		navigationItem.compactAppearance = appearance
+
 		NSLayoutConstraint.activate([
 			fullScreenTapZone.widthAnchor.constraint(equalToConstant: 150),
 			fullScreenTapZone.heightAnchor.constraint(equalToConstant: 44)
 		])
 		fullScreenTapZone.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(didTapNavigationBar)))
-		navigationItem.titleView = fullScreenTapZone
+		updateFullScreenTapZone()
+		#if compiler(>=6.4.2)
+		if #available(iOS 27.1, *) {
+			registerForTraitChanges(UITraitCollection.systemTraitsAffectingVerticalBarEdge) { (self: Self, _) in
+				self.updateFullScreenTapZone()
+			}
+		}
+		#endif
 
 		articleExtractorButton.addTarget(self, action: #selector(toggleArticleExtractor(_:)), for: .touchUpInside)
-		toolbarItems?.insert(UIBarButtonItem(customView: articleExtractorButton), at: 6)
+		let articleExtractorBarButtonItem = UIBarButtonItem(customView: articleExtractorButton)
+		articleExtractorBarButtonItem.title = NSLocalizedString("Reader View", comment: "Reader View")
 
-		if let parentNavController = navigationController?.parent as? UINavigationController {
-			poppableDelegate.navigationController = parentNavController
-			parentNavController.interactivePopGestureRecognizer?.delegate = poppableDelegate
+		if #available(iOS 26, *) {
+			#if compiler(>=6.4)
+			// visibilityPriority is new in iOS 27.
+			if #available(iOS 27, *) {
+				readBarButtonItem.visibilityPriority = .standard
+				starBarButtonItem.visibilityPriority = .standard
+				nextUnreadBarButtonItem.visibilityPriority = .high
+				articleExtractorBarButtonItem.visibilityPriority = .low
+				actionBarButtonItem.visibilityPriority = .high
+			}
+			#endif
+			toolbarItems?.insert(articleExtractorBarButtonItem, at: 5)
+		} else {
+			let flex = { UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil) }
+			toolbarItems = [
+				readBarButtonItem,
+				flex(),
+				starBarButtonItem,
+				flex(),
+				nextUnreadBarButtonItem,
+				flex(),
+				articleExtractorBarButtonItem,
+				flex(),
+				actionBarButtonItem
+			]
 		}
 
 		pageViewController = UIPageViewController(transitionStyle: .scroll, navigationOrientation: .horizontal, options: [:])
 		pageViewController.delegate = self
-		pageViewController.dataSource = self
+		updatePageViewControllerDataSource()
 
 		// This code is to disallow paging if we scroll from the left edge.  If this code is removed
 		// PoppableGestureRecognizerDelegate will allow us to both navigate back and page back at the
@@ -153,7 +223,7 @@ final class ArticleViewController: UIViewController {
 		articleExtractorButton.buttonState = controller.articleExtractorButtonState
 
 		self.pageViewController.setViewControllers([controller], direction: .forward, animated: false, completion: nil)
-		if AppDefaults.shared.logicalArticleFullscreenEnabled {
+		if AppDefaults.logicalArticleFullscreenEnabled {
 			controller.hideBars()
 		}
 
@@ -169,7 +239,7 @@ final class ArticleViewController: UIViewController {
 	}
 
 	override func viewWillAppear(_ animated: Bool) {
-		let hideToolbars = AppDefaults.shared.logicalArticleFullscreenEnabled
+		let hideToolbars = AppDefaults.logicalArticleFullscreenEnabled
 		if hideToolbars {
 			currentWebViewController?.hideBars()
 		} else {
@@ -179,10 +249,21 @@ final class ArticleViewController: UIViewController {
 	}
 
 	override func viewDidAppear(_ animated: Bool) {
-		super.viewDidAppear(true)
-		navigationController?.navigationBar.topItem?.subtitle = nil
+		super.viewDidAppear(animated)
+		if #available(iOS 26, *) {
+			navigationController?.navigationBar.topItem?.subtitle = nil
+		}
 		coordinator.isArticleViewControllerPending = false
 		searchBar.shouldBeginEditing = true
+		// Scoped to the article screen — restored in viewDidDisappear.
+		if let parentNavController = navigationController?.parent as? UINavigationController,
+			let gestureRecognizer = parentNavController.interactivePopGestureRecognizer {
+			if gestureRecognizer.delegate !== poppableDelegate {
+				originalPopGestureRecognizerDelegate = gestureRecognizer.delegate
+			}
+			poppableDelegate.navigationController = parentNavController
+			gestureRecognizer.delegate = poppableDelegate
+		}
 	}
 
 	override func viewWillDisappear(_ animated: Bool) {
@@ -191,19 +272,19 @@ final class ArticleViewController: UIViewController {
 			endFind()
 			searchBar.shouldBeginEditing = false
 		}
+		// Pass animated: false — animating the nav bar / toolbar visibility change during the
+		// disappear transition triggers an Auto Layout assertion (NSISEngine) and crashes.
+		currentWebViewController?.showBars(animated: false)
+	}
+
+	override func viewDidDisappear(_ animated: Bool) {
+		super.viewDidDisappear(animated)
+		restoreOriginalPopGestureRecognizerDelegate()
 	}
 
 	override func viewSafeAreaInsetsDidChange() {
 		// This will animate if the show/hide bars animation is happening.
 		view.layoutIfNeeded()
-	}
-
-	override func willTransition(to newCollection: UITraitCollection, with coordinator: any UIViewControllerTransitionCoordinator) {
-		// We only want to show bars when rotating to horizontalSizeClass == .regular
-		// (i.e., big) iPhones to resolve crash #4483.
-		if traitCollection.userInterfaceIdiom == .phone && newCollection.horizontalSizeClass == .regular {
-			currentWebViewController?.showBars()
-		}
 	}
 
 	func updateUI() {
@@ -219,14 +300,14 @@ final class ArticleViewController: UIViewController {
 			return
 		}
 
-		nextUnreadBarButtonItem.isEnabled = coordinator.isAnyUnreadAvailable
+		nextUnreadBarButtonItem.isEnabled = coordinator.isNextUnreadAvailable
 		prevArticleBarButtonItem.isEnabled = coordinator.isPrevArticleAvailable
 		nextArticleBarButtonItem.isEnabled = coordinator.isNextArticleAvailable
 		readBarButtonItem.isEnabled = true
 		starBarButtonItem.isEnabled = true
 
 		let permalinkPresent = article.preferredLink != nil
-		articleExtractorButton.isEnabled = permalinkPresent && !AppDefaults.shared.isDeveloperBuild
+		articleExtractorButton.isEnabled = permalinkPresent && !AppDefaults.isDeveloperBuild
 		actionBarButtonItem.isEnabled = permalinkPresent
 
 		if article.status.read {
@@ -270,9 +351,18 @@ final class ArticleViewController: UIViewController {
 		currentWebViewController?.fullReload()
 	}
 
+	@objc func handleArticleSwipeNavigationEnabledDidChange(_ notification: Notification) {
+		updatePageViewControllerDataSource()
+	}
+
+	/// A nil data source turns off swipe paging. `setViewControllers` still works.
+	func updatePageViewControllerDataSource() {
+		pageViewController.dataSource = AppDefaults.articleSwipeNavigationEnabled ? self : nil
+	}
+
 	@objc func willEnterForeground(_ note: Notification) {
 		// The toolbar will come back on you if you don't hide it again
-		if AppDefaults.shared.logicalArticleFullscreenEnabled {
+		if AppDefaults.logicalArticleFullscreenEnabled {
 			currentWebViewController?.hideBars()
 		}
 	}
@@ -325,10 +415,19 @@ final class ArticleViewController: UIViewController {
 		coordinator.navigateToTimeline()
 	}
 
+	@objc func scrollLineDown(_ sender: Any?) {
+		currentWebViewController?.scrollLineDown()
+	}
+
+	@objc func scrollLineUp(_ sender: Any?) {
+		currentWebViewController?.scrollLineUp()
+	}
+
 	// MARK: API
 
+	// Focus this view controller rather than the web view, since the web view is replaced on each article change.
 	func focus() {
-		currentWebViewController?.focus()
+		becomeFirstResponder()
 	}
 
 	func canScrollDown() -> Bool {
@@ -402,13 +501,14 @@ extension ArticleViewController {
 	@objc func beginFind(_ _: Any? = nil) {
 		searchBar.isHidden = false
 		navigationController?.setToolbarHidden(true, animated: true)
-		currentWebViewController?.additionalSafeAreaInsets.bottom = searchBar.frame.height
+		updateSearchBarPosition(keyboardHeight: 0)
 		searchBar.becomeFirstResponder()
 	}
 
 	@objc func endFind(_ _: Any? = nil) {
 		searchBar.resignFirstResponder()
 		searchBar.isHidden = true
+		searchBarBottomConstraint.constant = 0
 		navigationController?.setToolbarHidden(false, animated: true)
 		currentWebViewController?.additionalSafeAreaInsets.bottom = 0
 		currentWebViewController?.endSearch()
@@ -416,18 +516,28 @@ extension ArticleViewController {
 
 	@objc func keyboardWillChangeFrame(_ notification: Notification) {
 		if !searchBar.isHidden,
+			let window = view.window,
 			let duration = notification.userInfo?[UIWindow.keyboardAnimationDurationUserInfoKey] as? Double,
 			let curveRaw = notification.userInfo?[UIWindow.keyboardAnimationCurveUserInfoKey] as? UInt,
 			let frame = notification.userInfo?[UIWindow.keyboardFrameEndUserInfoKey] as? CGRect {
 
 			let curve = UIView.AnimationOptions(rawValue: curveRaw)
-			let newHeight = view.safeAreaLayoutGuide.layoutFrame.maxY - frame.minY
-			currentWebViewController?.additionalSafeAreaInsets.bottom = newHeight + searchBar.frame.height + 10
-			self.searchBarBottomConstraint.constant = newHeight
+			let keyboardFrame = view.convert(frame, from: window.screen.coordinateSpace)
+			let coversBottomEdge = keyboardFrame.maxY >= view.bounds.maxY
+			let newHeight = coversBottomEdge ? max(0, view.safeAreaLayoutGuide.layoutFrame.maxY - keyboardFrame.minY) : 0
+			updateSearchBarPosition(keyboardHeight: newHeight)
 			UIView.animate(withDuration: duration, delay: 0, options: curve, animations: {
 				self.view.layoutIfNeeded()
 			})
 		}
+	}
+
+	/// Puts the search bar above the keyboard and insets the web view to the search bar’s top.
+	private func updateSearchBarPosition(keyboardHeight: CGFloat) {
+		let searchBarBottom = keyboardHeight + Self.searchBarSpacing
+		searchBarBottomConstraint.constant = searchBarBottom
+		// The intrinsic height is correct before layout, unlike the frame right after un-hiding.
+		currentWebViewController?.additionalSafeAreaInsets.bottom = searchBarBottom + searchBar.intrinsicContentSize.height
 	}
 
 }
@@ -437,9 +547,10 @@ extension ArticleViewController {
 extension ArticleViewController: WebViewControllerDelegate {
 
 	func webViewController(_ webViewController: WebViewController, articleExtractorButtonStateDidUpdate buttonState: ArticleExtractorButtonState) {
-		if webViewController === currentWebViewController {
-			articleExtractorButton.buttonState = buttonState
+		guard webViewController === currentWebViewController else {
+			return
 		}
+		syncArticleExtractorButtonState()
 	}
 
 }
@@ -472,12 +583,34 @@ extension ArticleViewController: UIPageViewControllerDataSource {
 
 extension ArticleViewController: UIPageViewControllerDelegate {
 
+	func pageViewController(_ pageViewController: UIPageViewController, willTransitionTo pendingViewControllers: [UIViewController]) {
+		isPageTransitionInProgress = true
+	}
+
 	func pageViewController(_ pageViewController: UIPageViewController, didFinishAnimating finished: Bool, previousViewControllers: [UIViewController], transitionCompleted completed: Bool) {
+		isPageTransitionInProgress = false
+
+		if let pending = pendingSetViewController {
+			pendingSetViewController = nil
+			// Async because UIKit is still finishing the swipe — a synchronous
+			// setViewControllers here triggers an assertion in _UIQueuingScrollView.
+			DispatchQueue.main.async {
+				if self.isPageTransitionInProgress {
+					self.pendingSetViewController = pending
+				} else {
+					self.pageViewController.setViewControllers([pending], direction: .forward, animated: false, completion: nil)
+					self.syncArticleExtractorButtonState()
+				}
+			}
+		}
+
+		syncArticleExtractorButtonState()
+
 		guard finished, completed else { return }
 		guard let article = currentWebViewController?.article else { return }
 
 		coordinator.selectArticle(article, animations: [.select, .scroll, .navigation])
-		articleExtractorButton.buttonState = currentWebViewController?.articleExtractorButtonState ?? .off
+		syncArticleExtractorButtonState()
 
 		for viewController in previousViewControllers {
 			if let webViewController = viewController as? WebViewController {
@@ -496,11 +629,13 @@ extension ArticleViewController: UIGestureRecognizerDelegate {
     }
 
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
-		let point = gestureRecognizer.location(in: nil)
-		if point.x > 40 {
+		// Paging is the only thing to hold back near the left edge. Refusing every other
+		// recognizer there also blocked the split view's reveal gesture, so an edge swipe
+		// did nothing over the article while it still worked alongside the toolbars.
+		guard otherGestureRecognizer === pageViewController.scrollViewInsidePageControl?.panGestureRecognizer else {
 			return true
 		}
-		return false
+		return gestureRecognizer.location(in: nil).x > 40
     }
 
 }
@@ -515,6 +650,29 @@ private extension ArticleViewController {
 		controller.delegate = self
 		controller.setArticle(article, updateView: updateView)
 		return controller
+	}
+
+	/// No tap zone with a vertical bar (Duo) — it would be the only thing in the top bar.
+	func updateFullScreenTapZone() {
+		#if compiler(>=6.4.2)
+		if #available(iOS 27.1, *), traitCollection.verticalBarEdge != .unspecified {
+			navigationItem.titleView = nil
+			return
+		}
+		#endif
+		navigationItem.titleView = fullScreenTapZone
+	}
+
+	func syncArticleExtractorButtonState() {
+		articleExtractorButton.buttonState = currentWebViewController?.articleExtractorButtonState ?? .off
+	}
+
+	func restoreOriginalPopGestureRecognizerDelegate() {
+		guard let gestureRecognizer = poppableDelegate.navigationController?.interactivePopGestureRecognizer,
+			gestureRecognizer.delegate === poppableDelegate else {
+			return
+		}
+		gestureRecognizer.delegate = originalPopGestureRecognizerDelegate
 	}
 
 }

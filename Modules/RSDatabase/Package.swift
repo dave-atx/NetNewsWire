@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
 	name: "RSDatabase",
-	platforms: [.macOS(.v26), .iOS(.v26)],
+	platforms: [.macOS(.v15), .iOS(.v18)],
 	products: [
 		.library(
 			name: "RSDatabase",
@@ -31,6 +31,6 @@ let package = Package(
 		),
 		.testTarget(
 			name: "RSDatabaseTests",
-			dependencies: ["RSDatabase"])
+			dependencies: ["RSDatabase", "RSDatabaseObjC"])
 	]
 )

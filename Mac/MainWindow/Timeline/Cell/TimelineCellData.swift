@@ -8,6 +8,7 @@
 
 import AppKit
 import Articles
+import Images
 
 @MainActor struct TimelineCellData {
 
@@ -22,33 +23,30 @@ import Articles
 	let showFeedName: TimelineShowFeedName
 	let iconImage: IconImage? // feed icon, user avatar, or favicon
 	let showIcon: Bool // Make space even when icon is nil
+	let thumbnail: NSImage?
+	let showThumbnail: Bool // Make space even when thumbnail is nil
 	let read: Bool
 	let starred: Bool
 
-	init(article: Article, showFeedName: TimelineShowFeedName, feedName: String?, byline: String?, iconImage: IconImage?, showIcon: Bool) {
+	init(article: Article, showFeedName: TimelineShowFeedName, feedName: String?, byline: String?, iconImage: IconImage?, showIcon: Bool, thumbnail: NSImage?, showThumbnail: Bool) {
 
-		self.title = ArticleStringFormatter.truncatedTitle(article)
-		self.attributedTitle = ArticleStringFormatter.attributedTruncatedTitle(article)
+		self.title = ArticleStringFormatter.shared.truncatedTitle(article)
+		self.attributedTitle = ArticleStringFormatter.shared.attributedTruncatedTitle(article)
+		self.text = Self.summaryText(for: article, title: self.title)
 
-		let truncatedSummary = ArticleStringFormatter.truncatedSummary(article)
-		if self.title.isEmpty && truncatedSummary.isEmpty {
-			self.text = Self.noText
-		} else {
-			self.text = truncatedSummary
-		}
-
-		self.dateString = ArticleStringFormatter.dateString(article.logicalDatePublished)
+		self.dateString = ArticleStringFormatter.shared.dateString(article.logicalDatePublished)
 
 		if let feedName = feedName {
-			self.feedName = ArticleStringFormatter.truncatedFeedName(feedName)
+			self.feedName = ArticleStringFormatter.shared.truncatedFeedName(feedName)
 		} else {
 			self.feedName = ""
 		}
 
-		if let byline = byline {
+		// Falls back to the feed name so the line is never empty.
+		if let byline, !byline.isEmpty {
 			self.byline = byline
 		} else {
-			self.byline = ""
+			self.byline = self.feedName
 		}
 
 		self.showFeedName = showFeedName
@@ -56,8 +54,20 @@ import Articles
 		self.showIcon = showIcon
 		self.iconImage = iconImage
 
+		self.thumbnail = thumbnail
+		self.showThumbnail = showThumbnail
+
 		self.read = article.status.read
 		self.starred = article.status.starred
+	}
+
+	/// The article’s summary, or “(No Text)” when it has neither a title nor a summary.
+	static func summaryText(for article: Article, title: String) -> String {
+		let truncatedSummary = ArticleStringFormatter.shared.truncatedSummary(article)
+		if title.isEmpty && truncatedSummary.isEmpty {
+			return noText
+		}
+		return truncatedSummary
 	}
 
 	init() { // Empty
@@ -69,6 +79,8 @@ import Articles
 		self.showFeedName = .none
 		self.showIcon = false
 		self.iconImage = nil
+		self.thumbnail = nil
+		self.showThumbnail = false
 		self.read = true
 		self.starred = false
 		self.attributedTitle = NSAttributedString()

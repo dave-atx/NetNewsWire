@@ -10,21 +10,35 @@ import UIKit
 import RSCore
 import Account
 import RSTree
+import Images
 
 final class MainFeedCollectionViewCell: UICollectionViewCell {
 	@IBOutlet var feedTitle: UILabel!
 	@IBOutlet var faviconView: IconView!
 	@IBOutlet var unreadCountLabel: UILabel!
+	@IBOutlet var faviconWidthConstraint: NSLayoutConstraint?
+	@IBOutlet var feedTitleLeadingConstraint: NSLayoutConstraint?
 	private var faviconLeadingConstraint: NSLayoutConstraint?
+
+	private static let faviconWidth: CGFloat = 24
+	private static let feedTitleSpacing: CGFloat = 8
+
+	/// Without the icon, the title starts where the icon would be.
+	var showsIcon = true {
+		didSet {
+			guard showsIcon != oldValue else {
+				return
+			}
+			faviconView.isHidden = !showsIcon
+			faviconWidthConstraint?.constant = showsIcon ? Self.faviconWidth : 0
+			feedTitleLeadingConstraint?.constant = showsIcon ? Self.feedTitleSpacing : 0
+		}
+	}
 
 	var iconImage: IconImage? {
 		didSet {
 			faviconView.iconImage = iconImage
-			if let preferredColor = iconImage?.preferredColor {
-				faviconView.tintColor = UIColor(cgColor: preferredColor)
-			} else {
-				faviconView.tintColor = Assets.Colors.secondaryAccent
-			}
+			faviconView.tintColor = iconImage?.preferredColor ?? Assets.Colors.secondaryAccent
 		}
 	}
 
@@ -36,12 +50,9 @@ final class MainFeedCollectionViewCell: UICollectionViewCell {
 		}
 		set {
 			_unreadCount = newValue
-			if newValue == 0 {
-				unreadCountLabel.isHidden = true
-			} else {
-				unreadCountLabel.isHidden = false
-			}
-			unreadCountLabel.text = newValue.formatted()
+			unreadCountLabel.isHidden = AppDefaults.unreadCountDisplay.text(for: newValue) == nil
+			unreadCountLabel.setUnreadCount(newValue)
+			setNeedsUpdateConfiguration()
 		}
 	}
 
@@ -62,12 +73,11 @@ final class MainFeedCollectionViewCell: UICollectionViewCell {
 
 	override var accessibilityLabel: String? {
 		get {
-			if unreadCount > 0 {
-				let unreadLabel = NSLocalizedString("unread", comment: "Unread label for accessibility")
-				return "\(String(describing: feedTitle.text)) \(unreadCount) \(unreadLabel)"
-			} else {
-				return (String(describing: feedTitle.text))
+			let name = feedTitle.text ?? ""
+			guard let unreadText = AppDefaults.unreadCountDisplay.accessibilityText(for: unreadCount) else {
+				return name
 			}
+			return "\(name) \(unreadText)"
 		}
 		set {}
 	}
@@ -75,6 +85,10 @@ final class MainFeedCollectionViewCell: UICollectionViewCell {
     override func awakeFromNib() {
 		MainActor.assumeIsolated {
 			super.awakeFromNib()
+			isAccessibilityElement = true
+			feedTitle.isAccessibilityElement = false
+			unreadCountLabel.isAccessibilityElement = false
+			faviconView.isAccessibilityElement = false
 			faviconLeadingConstraint = faviconView.leadingAnchor.constraint(equalTo: contentView.safeAreaLayoutGuide.leadingAnchor)
 			faviconLeadingConstraint?.isActive = true
 		}
@@ -83,7 +97,23 @@ final class MainFeedCollectionViewCell: UICollectionViewCell {
 	override func updateConfiguration(using state: UICellConfigurationState) {
 		var backgroundConfig = UIBackgroundConfiguration.listCell().updated(for: state)
 
-		switch (state.isHighlighted || state.isSelected || state.isFocused, traitCollection.userInterfaceIdiom) {
+		// Matches the timeline: accent background and white text when the feeds list is first responder,
+		// and no highlight while a row is pressed, so the row goes straight to the selected style.
+		let isExpanded = isInExpandedSplitView
+		let isActiveSelection = state.isSelected && isExpanded && enclosingViewController?.isFirstResponder == true
+		let isHighlighted = state.isHighlighted && !isExpanded
+		if state.isHighlighted && !state.isSelected && isExpanded {
+			backgroundConfig.backgroundColor = .clear
+		}
+
+		switch (isHighlighted || state.isSelected || state.isFocused, traitCollection.userInterfaceIdiom) {
+		case _ where isActiveSelection:
+			backgroundConfig.backgroundColor = Assets.Colors.primaryAccent
+			feedTitle.textColor = .white
+			feedTitle.font = UIFont.systemFont(ofSize: UIFont.preferredFont(forTextStyle: .body).pointSize, weight: .semibold)
+			unreadCountLabel.textColor = .white
+			unreadCountLabel.font = UIFont.systemFont(ofSize: UIFont.preferredFont(forTextStyle: .body).pointSize, weight: .semibold)
+			faviconView.tintColor = .white
 		case (true, .pad):
 			backgroundConfig.backgroundColor = .tertiarySystemFill
 			feedTitle.textColor = Assets.Colors.primaryAccent
@@ -91,27 +121,13 @@ final class MainFeedCollectionViewCell: UICollectionViewCell {
 											   weight: .semibold)
 			unreadCountLabel.textColor = Assets.Colors.primaryAccent
 			unreadCountLabel.font = UIFont.systemFont(ofSize: UIFont.preferredFont(forTextStyle: .body).pointSize, weight: .semibold)
-		case (true, .phone):
-			backgroundConfig.backgroundColor = Assets.Colors.primaryAccent
-			feedTitle.textColor = .white
-			unreadCountLabel.textColor = .white
-			if feedTitle.text == "All Unread" {
-				faviconView.tintColor = .white
-			}
+			faviconView.tintColor = iconImage?.preferredColor ?? Assets.Colors.secondaryAccent
 		default:
 			feedTitle.textColor = .label
 			feedTitle.font = UIFont.preferredFont(forTextStyle: .body)
 			unreadCountLabel.font = UIFont.preferredFont(forTextStyle: .body)
 			unreadCountLabel.textColor = .secondaryLabel
-			if traitCollection.userInterfaceIdiom == .phone {
-				if feedTitle.text == "All Unread" {
-					if let preferredColor = iconImage?.preferredColor {
-						faviconView.tintColor = UIColor(cgColor: preferredColor)
-					} else {
-						faviconView.tintColor = Assets.Colors.secondaryAccent
-					}
-				}
-			}
+			faviconView.tintColor = iconImage?.preferredColor ?? Assets.Colors.secondaryAccent
 		}
 		self.backgroundConfiguration = backgroundConfig
 	}

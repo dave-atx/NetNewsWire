@@ -14,7 +14,7 @@ import XCTest
 	func testParsing() {
 		let content = FeedlyEntry.Content(content: "Test Content", direction: .leftToRight)
 		let summary = FeedlyEntry.Content(content: "Test Summary", direction: .leftToRight)
-		let origin = FeedlyOrigin(title: "Test Feed", streamId: "tests://feeds/1", htmlUrl: nil)
+		let origin = FeedlyOrigin(title: "Test Feed", streamID: "tests://feeds/1", htmlURL: nil)
 		let canonicalLink = FeedlyLink(href: "tests://feeds/1/entries/1", type: "text/html")
 		let tags = [
 			FeedlyTag(id: "tests/tags/1", label: "Tag 1"),
@@ -27,21 +27,23 @@ import XCTest
 								author: "Bob Alice",
 								crawled: .distantPast,
 								recrawled: Date(timeIntervalSinceReferenceDate: 0),
+								published: nil,
 								origin: origin,
 								canonical: [canonicalLink],
 								alternate: nil,
 								unread: false,
 								tags: tags,
 								categories: nil,
-								enclosure: nil)
+								enclosure: nil,
+								visual: nil)
 
 		let parser = FeedlyEntryParser(entry: entry)
 
 		XCTAssertEqual(parser.id, entry.id)
-		XCTAssertEqual(parser.feedUrl, origin.streamId)
-		XCTAssertEqual(parser.externalUrl, canonicalLink.href)
+		XCTAssertEqual(parser.feedURL, origin.streamID)
+		XCTAssertEqual(parser.externalURL, canonicalLink.href)
 		XCTAssertEqual(parser.title, entry.title)
-		XCTAssertEqual(parser.contentHMTL, content.content)
+		XCTAssertEqual(parser.contentHTML, content.content)
 		XCTAssertEqual(parser.summary, summary.content)
 		XCTAssertEqual(parser.datePublished, .distantPast)
 		XCTAssertEqual(parser.dateModified, Date(timeIntervalSinceReferenceDate: 0))
@@ -56,7 +58,7 @@ import XCTest
 
 		// The following is not an error.
 		// The feedURL must match the feedID for the article to be connected to its matching feed.
-		XCTAssertEqual(item.feedURL, origin.streamId)
+		XCTAssertEqual(item.feedURL, origin.streamID)
 		XCTAssertEqual(item.title, entry.title)
 		XCTAssertEqual(item.contentHTML, content.content)
 		XCTAssertEqual(item.contentText, nil, "Is it now free of HTML characters?")
@@ -76,7 +78,7 @@ import XCTest
 		let content = FeedlyEntry.Content(content: "<div style=\"direction:rtl;text-align:right\">Test Content</div>", direction: .rightToLeft)
 		let summaryContent = "Test Summary"
 		let summary = FeedlyEntry.Content(content: "<div style=\"direction:rtl;text-align:right\">\(summaryContent)</div>", direction: .rightToLeft)
-		let origin = FeedlyOrigin(title: "Test Feed", streamId: "tests://feeds/1", htmlUrl: nil)
+		let origin = FeedlyOrigin(title: "Test Feed", streamID: "tests://feeds/1", htmlURL: nil)
 		let title = "Test Entry 1"
 		let entry = FeedlyEntry(id: "tests/feeds/1/entries/1",
 								title: "<div style=\"direction:rtl;text-align:right\">\(title)</div>",
@@ -85,13 +87,15 @@ import XCTest
 								author: nil,
 								crawled: .distantPast,
 								recrawled: nil,
+								published: nil,
 								origin: origin,
 								canonical: nil,
 								alternate: nil,
 								unread: false,
 								tags: nil,
 								categories: nil,
-								enclosure: nil)
+								enclosure: nil,
+								visual: nil)
 
 		let parser = FeedlyEntryParser(entry: entry)
 
@@ -100,10 +104,10 @@ import XCTest
 		XCTAssertEqual(parser.summary, summaryContent)
 
 		// These should not be sanitized because it is supposed to be HTML content.
-		XCTAssertEqual(parser.contentHMTL, content.content)
+		XCTAssertEqual(parser.contentHTML, content.content)
 	}
 
-	func testLocatesCanonicalExternalUrl() {
+	func testLocatesCanonicalExternalURL() {
 		let canonicalLink = FeedlyLink(href: "tests://feeds/1/entries/1", type: "text/html")
 		let alternateLink = FeedlyLink(href: "tests://feeds/1/entries/alternate/1", type: "text/html")
 		let entry = FeedlyEntry(id: "tests/feeds/1/entries/1",
@@ -113,20 +117,22 @@ import XCTest
 								author: nil,
 								crawled: .distantPast,
 								recrawled: Date(timeIntervalSinceReferenceDate: 0),
+								published: nil,
 								origin: nil,
 								canonical: [canonicalLink],
 								alternate: [alternateLink],
 								unread: false,
 								tags: nil,
 								categories: nil,
-								enclosure: nil)
+								enclosure: nil,
+								visual: nil)
 
 		let parser = FeedlyEntryParser(entry: entry)
 
-		XCTAssertEqual(parser.externalUrl, canonicalLink.href)
+		XCTAssertEqual(parser.externalURL, canonicalLink.href)
 	}
 
-	func testLocatesAlternateExternalUrl() {
+	func testLocatesAlternateExternalURL() {
 		let canonicalLink = FeedlyLink(href: "tests://feeds/1/entries/1", type: "text/json")
 		let alternateLink = FeedlyLink(href: "tests://feeds/1/entries/alternate/1", type: nil)
 		let entry = FeedlyEntry(id: "tests/feeds/1/entries/1",
@@ -136,17 +142,19 @@ import XCTest
 								author: nil,
 								crawled: .distantPast,
 								recrawled: Date(timeIntervalSinceReferenceDate: 0),
+								published: nil,
 								origin: nil,
 								canonical: [canonicalLink],
 								alternate: [alternateLink],
 								unread: false,
 								tags: nil,
 								categories: nil,
-								enclosure: nil)
+								enclosure: nil,
+								visual: nil)
 
 		let parser = FeedlyEntryParser(entry: entry)
 
-		XCTAssertEqual(parser.externalUrl, alternateLink.href)
+		XCTAssertEqual(parser.externalURL, alternateLink.href)
 	}
 
 	func testContentPreferredToSummary() {
@@ -159,17 +167,35 @@ import XCTest
 								author: nil,
 								crawled: .distantPast,
 								recrawled: Date(timeIntervalSinceReferenceDate: 0),
+								published: nil,
 								origin: nil,
 								canonical: nil,
 								alternate: nil,
 								unread: false,
 								tags: nil,
 								categories: nil,
-								enclosure: nil)
+								enclosure: nil,
+								visual: nil)
 
 		let parser = FeedlyEntryParser(entry: entry)
 
-		XCTAssertEqual(parser.contentHMTL, content.content)
+		XCTAssertEqual(parser.contentHTML, content.content)
+	}
+
+	func testPublishedDateUsedWhenNotAfterCrawlDate() {
+		let crawled = Date(timeIntervalSinceReferenceDate: 1_000_000)
+		let published = Date(timeIntervalSinceReferenceDate: 500_000)
+		let entry = makeEntry(crawled: crawled, published: published)
+
+		XCTAssertEqual(FeedlyEntryParser(entry: entry).datePublished, published)
+	}
+
+	func testFutureDatedPublishedDateFallsBackToCrawlDate() {
+		let crawled = Date(timeIntervalSinceReferenceDate: 1_000_000)
+		let published = Date(timeIntervalSinceReferenceDate: 2_000_000)
+		let entry = makeEntry(crawled: crawled, published: published)
+
+		XCTAssertEqual(FeedlyEntryParser(entry: entry).datePublished, crawled)
 	}
 
 	func testSummaryUsedAsContentWhenContentMissing() {
@@ -181,16 +207,37 @@ import XCTest
 								author: nil,
 								crawled: .distantPast,
 								recrawled: Date(timeIntervalSinceReferenceDate: 0),
+								published: nil,
 								origin: nil,
 								canonical: nil,
 								alternate: nil,
 								unread: false,
 								tags: nil,
 								categories: nil,
-								enclosure: nil)
+								enclosure: nil,
+								visual: nil)
 
 		let parser = FeedlyEntryParser(entry: entry)
 
-		XCTAssertEqual(parser.contentHMTL, summary.content)
+		XCTAssertEqual(parser.contentHTML, summary.content)
+	}
+
+	private func makeEntry(crawled: Date, published: Date?) -> FeedlyEntry {
+		FeedlyEntry(id: "tests/feeds/1/entries/1",
+					title: "Test Entry 1",
+					content: nil,
+					summary: nil,
+					author: nil,
+					crawled: crawled,
+					recrawled: nil,
+					published: published,
+					origin: nil,
+					canonical: nil,
+					alternate: nil,
+					unread: false,
+					tags: nil,
+					categories: nil,
+					enclosure: nil,
+					visual: nil)
 	}
 }

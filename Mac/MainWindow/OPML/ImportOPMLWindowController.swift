@@ -25,21 +25,25 @@ final class ImportOPMLWindowController: NSWindowController {
 		let menu = NSMenu()
 		accountPopUpButton.menu = menu
 
-		for oneAccount in AccountManager.shared.sortedActiveAccounts {
+		let accounts: [Account] = AccountManager.shared.sortedActiveAccounts
+		let savedAccountID: String? = AppDefaults.importOPMLAccountID
 
+		for oneAccount in accounts {
 			if oneAccount.behaviors.contains(.disallowOPMLImports) {
 				continue
 			}
+			addMenuItem(to: menu, for: oneAccount, savedAccountID: savedAccountID)
+		}
+	}
 
-			let oneMenuItem = NSMenuItem()
-			oneMenuItem.title = oneAccount.nameForDisplay
-			oneMenuItem.representedObject = oneAccount
-			menu.addItem(oneMenuItem)
+	private func addMenuItem(to menu: NSMenu, for account: Account, savedAccountID: String?) {
+		let menuItem = NSMenuItem()
+		menuItem.title = account.nameForDisplay
+		menuItem.representedObject = account
+		menu.addItem(menuItem)
 
-			if oneAccount.accountID == AppDefaults.shared.importOPMLAccountID {
-				accountPopUpButton.select(oneMenuItem)
-			}
-
+		if account.accountID == savedAccountID {
+			accountPopUpButton.select(menuItem)
 		}
 	}
 
@@ -73,7 +77,7 @@ final class ImportOPMLWindowController: NSWindowController {
 		}
 
 		let account = menuItem.representedObject as! Account
-		AppDefaults.shared.importOPMLAccountID = account.accountID
+		AppDefaults.importOPMLAccountID = account.accountID
 		hostWindow!.endSheet(window!, returnCode: NSApplication.ModalResponse.OK)
 		importOPML(account: account)
 

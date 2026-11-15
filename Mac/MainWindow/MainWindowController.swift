@@ -18,15 +18,13 @@ enum TimelineSourceMode {
 }
 
 final class MainWindowController: NSWindowController, NSUserInterfaceValidations {
-	static private let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "MainWindowController")
-
-	@IBOutlet var articleThemePopUpButton: NSPopUpButton?
+	static private let logger = Logger(subsystem: Logger.nnwSubsystem, category: "MainWindowController")
 
     private var activityManager = ActivityManager()
 
 	private var isShowingExtractedArticle = false
 	private var articleExtractor: ArticleExtractor?
-	private var sharingServicePickerDelegate: NSSharingServicePickerDelegate?
+	private var sharingServicePickerDelegate: SharingServicePickerDelegate?
 
 	private let windowAutosaveName = NSWindow.FrameAutosaveName("MainWindow")
 	private static let mainWindowWidthsStateKey = "mainWindowWidthsStateKey"
@@ -43,38 +41,53 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
 		return window?.toolbar?.existingItem(withIdentifier: .share)
 	}
 
-	private static var detailViewMinimumThickness = 384
+	private static let detailViewMinimumWidth = 384
+	private static let detailViewMinimumHeight: CGFloat = 200
+	private static let timelineMinimumHeight: CGFloat = 120
+	private static let sidebarMinimumWidth: CGFloat = 96
+	// Used for the timeline when column layout has no saved height.
+	private static let defaultColumnLayoutTimelineHeightFraction: CGFloat = 0.4
+	private static let sidebarHoldingPriority: Float = 260
+	private static let timelineHoldingPriority: Float = 255
+	private static let toolbarIdentifier = "MainWindowToolbar"
+	private var splitViewController: NSSplitViewController?
+	// Column layout only: the vertical split holding the timeline above the article view.
+	private var contentSplitViewController: NSSplitViewController?
+	private var timelineLayout = AppDefaults.timelineLayout
+	// Geometry for the layout that isn’t showing, so a round trip through the other layout keeps it.
+	private var rememberedStandardLayoutWidths = [Int]()
+	private var rememberedColumnLayoutTimelineHeight = 0
 	private var sidebarViewController: SidebarViewController?
 	private var timelineContainerViewController: TimelineContainerViewController?
 	private var detailViewController: DetailViewController?
 	private var currentSearchField: NSSearchField?
-	private let articleThemeMenuToolbarItem = NSMenuToolbarItem(itemIdentifier: .articleThemeMenu)
 	private var searchString: String?
 	private var lastSentSearchString: String?
 	private var timelineSourceMode: TimelineSourceMode = .regular {
 		didSet {
 			timelineContainerViewController?.showTimeline(for: timelineSourceMode)
 			detailViewController?.showDetail(for: timelineSourceMode)
+			updateStatusBarLink()
 		}
 	}
 	private var searchSmartFeed: SmartFeed?
 	private var restoreArticleWindowScrollY: CGFloat?
+	// Holds the split view controller and the status bar.
+	private let mainWindowContentViewController = MainWindowContentViewController()
+	private var mouseoverLink: String? {
+		didSet {
+			updateStatusBarLink()
+		}
+	}
 
 	// MARK: - NSWindowController
 
+	convenience init() {
+		self.init(windowNibName: "MainWindow")
+	}
+
 	override func windowDidLoad() {
 		super.windowDidLoad()
-
-		sharingServicePickerDelegate = SharingServicePickerDelegate(self.window)
-
-		updateArticleThemeMenu()
-
-		let toolbar = NSToolbar(identifier: "MainWindowToolbar")
-		toolbar.allowsUserCustomization = true
-		toolbar.autosavesConfiguration = true
-		toolbar.displayMode = .iconOnly
-		toolbar.delegate = self
-		self.window?.toolbar = toolbar
 
 		if let window = window {
 			let point = NSPoint(x: 128, y: 64)
@@ -83,26 +96,35 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
 			window.setPointAndSizeAdjustingForScreen(point: point, size: size, minimumSize: minSize)
 		}
 
-		detailSplitViewItem?.minimumThickness = CGFloat(MainWindowController.detailViewMinimumThickness)
+		// The three panes live for the window’s life. Switching layout rebuilds only the split views around them.
+		let sidebarViewController = SidebarViewController()
+		sidebarViewController.delegate = self
+		sidebarViewController.view.translatesAutoresizingMaskIntoConstraints = false
+		sidebarViewController.view.widthAnchor.constraint(greaterThanOrEqualToConstant: Self.sidebarMinimumWidth).isActive = true
+		self.sidebarViewController = sidebarViewController
 
-		let sidebarSplitViewItem = splitViewController?.splitViewItems[0]
-		sidebarViewController = sidebarSplitViewItem?.viewController as? SidebarViewController
-		sidebarViewController!.splitViewItem = sidebarSplitViewItem
-		sidebarViewController!.delegate = self
-		sidebarViewController!.view.translatesAutoresizingMaskIntoConstraints = false
-		sidebarViewController!.view.widthAnchor.constraint(greaterThanOrEqualToConstant: 96).isActive = true
+		let timelineContainerViewController = TimelineContainerViewController()
+		timelineContainerViewController.delegate = self
+		self.timelineContainerViewController = timelineContainerViewController
 
-		timelineContainerViewController = splitViewController?.splitViewItems[1].viewController as? TimelineContainerViewController
-		timelineContainerViewController!.delegate = self
-		splitViewController?.splitViewItems[1].automaticallyAdjustsSafeAreaInsets = true
+		let detailViewController = DetailViewController()
+		detailViewController.delegate = self
+		self.detailViewController = detailViewController
 
-		detailViewController = splitViewController?.splitViewItems[2].viewController as? DetailViewController
+		mainWindowContentViewController.statusBarView.delegate = self
+		updateStatusBarVisibility()
 
+		installSplitViewController(for: timelineLayout)
+
+		sharingServicePickerDelegate = SharingServicePickerDelegate(self.window)
+
+		NotificationCenter.default.addObserver(self, selector: #selector(handleUserDefaultsDidChange(_:)), name: UserDefaults.didChangeNotification, object: nil)
 		NotificationCenter.default.addObserver(self, selector: #selector(refreshProgressDidChange(_:)), name: .AccountRefreshDidBegin, object: nil)
 		NotificationCenter.default.addObserver(self, selector: #selector(refreshProgressDidChange(_:)), name: .AccountRefreshDidFinish, object: nil)
 		NotificationCenter.default.addObserver(self, selector: #selector(refreshProgressDidChange(_:)), name: .progressInfoDidChange, object: CombinedRefreshProgress.shared)
 
 		NotificationCenter.default.addObserver(self, selector: #selector(unreadCountDidChange(_:)), name: .UnreadCountDidChange, object: nil)
+		NotificationCenter.default.addObserver(self, selector: #selector(handleUnreadCountDisplaySettingDidChange(_:)), name: .unreadCountDisplaySettingDidChange, object: nil)
 		NotificationCenter.default.addObserver(self, selector: #selector(displayNameDidChange(_:)), name: .DisplayNameDidChange, object: nil)
 
 		NotificationCenter.default.addObserver(self, selector: #selector(articleThemeNamesDidChangeNotification(_:)), name: .ArticleThemeNamesDidChangeNotification, object: nil)
@@ -118,6 +140,14 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
 
 	func selectedObjectsInSidebar() -> [AnyObject]? {
 		return sidebarViewController?.selectedObjects
+	}
+
+	func selectedContainerInSidebar() -> Container? {
+		sidebarViewController?.selectedContainer
+	}
+
+	func selectFeedInSidebar(_ feed: Feed) {
+		sidebarViewController?.selectFeed(feed)
 	}
 
 	func handle(_ response: UNNotificationResponse) {
@@ -138,32 +168,57 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
 		let state = savableState()
 		Self.logger.debug("MainWindowController: Saving state to UserDefaults: \(state)")
 		let data = try? NSKeyedArchiver.archivedData(withRootObject: state, requiringSecureCoding: true)
-		AppDefaults.shared.secureWindowState = data
-		window?.saveFrame(usingName: windowAutosaveName)
+		AppDefaults.secureWindowState = data
+		// Don't save the frame in full screen — it would replace the saved windowed frame with the screen's frame.
+		if let window, !window.styleMask.contains(.fullScreen) {
+			window.saveFrame(usingName: windowAutosaveName)
+		}
 	}
 
 	func restoreStateFromUserDefaults() {
-		if let data = AppDefaults.shared.secureWindowState,
+		if let data = AppDefaults.secureWindowState,
 		   let state = try? NSKeyedUnarchiver.unarchivedObject(ofClass: MainWindowState.self, from: data) {
 			Self.logger.debug("MainWindowController: restoring state from UserDefaults: \(state)")
 			window?.setFrameUsingName(windowAutosaveName, force: true)
 			restoreState(from: state)
-		} else if let state = AppDefaults.shared.legacyWindowState {
+		} else if let state = AppDefaults.legacyWindowState {
 			// Migrate from previous window state data. Delete data when finished.
 			window?.setFrameUsingName(windowAutosaveName, force: true)
 			restoreLegacyState(from: state)
-			AppDefaults.shared.deleteLegacyWindowState()
+			AppDefaults.deleteLegacyWindowState()
 		}
 	}
 
 	// MARK: - Notifications
+
+	@objc nonisolated func handleUserDefaultsDidChange(_ note: Notification) {
+		Task { @MainActor in
+			self.userDefaultsDidChange()
+		}
+	}
+
+	private func userDefaultsDidChange() {
+		let layout = AppDefaults.timelineLayout
+		if layout != timelineLayout {
+			installSplitViewController(for: layout)
+		}
+		updateStatusBarVisibility()
+	}
 
 	@objc func refreshProgressDidChange(_ note: Notification) {
 		CoalescingQueue.standard.add(self, #selector(makeToolbarValidate))
 	}
 
 	@objc func unreadCountDidChange(_ note: Notification) {
-		updateWindowTitleIfNecessary(note.object)
+		CoalescingQueue.standard.add(self, #selector(coalescedUpdateWindowTitle))
+	}
+
+	@objc func handleUnreadCountDisplaySettingDidChange(_ notification: Notification) {
+		updateWindowTitle()
+	}
+
+	@objc func coalescedUpdateWindowTitle() {
+		updateWindowTitle()
 	}
 
 	@objc func displayNameDidChange(_ note: Notification) {
@@ -280,6 +335,22 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
 			return validateToggleReadArticles(item)
 		}
 
+		if item.action == #selector(sortArticlesByField(_:)) {
+			return validateSortArticlesByField(item)
+		}
+
+		if item.action == #selector(sortArticlesAscending(_:)) {
+			return validateSortDirection(item, direction: .orderedAscending)
+		}
+
+		if item.action == #selector(sortArticlesDescending(_:)) {
+			return validateSortDirection(item, direction: .orderedDescending)
+		}
+
+		if let isShown = SidebarViewController.smartFeedIsShown(forGoToAction: item.action) {
+			return isShown
+		}
+
 		if item.action == #selector(performFindPanelAction(_:)) {
 			return self.detailViewController?.canFindInCurrentArticle ?? false
 		}
@@ -352,7 +423,7 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
 	}
 
 	@IBAction func openInBrowser(_ sender: Any?) {
-		if AppDefaults.shared.openInBrowserInBackground {
+		if AppDefaults.openInBrowserInBackground {
 			window?.makeKeyAndOrderFront(self)
 		}
 		openArticleInBrowser(sender)
@@ -364,11 +435,11 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
 	}
 
 	@IBAction func openInBrowserUsingOppositeOfSettings(_ sender: Any?) {
-		if !AppDefaults.shared.openInBrowserInBackground {
+		if !AppDefaults.openInBrowserInBackground {
 			window?.makeKeyAndOrderFront(self)
 		}
 		if let link = currentLink {
-			Browser.open(link, inBackground: !AppDefaults.shared.openInBrowserInBackground)
+			Browser.open(link, inBackground: !AppDefaults.openInBrowserInBackground)
 		}
 	}
 
@@ -376,6 +447,9 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
 		guard let timelineViewController = currentTimelineViewController, let sidebarViewController = sidebarViewController else {
 			return
 		}
+
+		// Flush coalesced unread-count updates so folder counts are current.
+		CoalescingQueue.standard.performCallsImmediately()
 
 		NSCursor.setHiddenUntilMouseMoves(true)
 
@@ -523,19 +597,36 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
 			assertionFailure("Expected toolbarShowShareMenu to be called only by the Share item in the toolbar.")
 			return
 		}
-		guard let view = shareToolbarItem.view else {
-			// TODO: handle menu form representation
+		// In the toolbar's Text Only mode or overflow menu the item's view isn't on-window, so anchor the picker to the window instead.
+		let anchorView: NSView
+		let anchorRect: NSRect
+		if let view = shareToolbarItem.view, view.window != nil {
+			anchorView = view
+			anchorRect = view.bounds
+		} else if let contentView = window?.contentView {
+			anchorView = contentView
+			anchorRect = NSRect(x: contentView.frame.width / 2.0, y: contentView.frame.height - 4, width: 1, height: 1)
+		} else {
 			return
 		}
 
 		let sortedArticles = selectedArticles.sortedByDate(.orderedAscending)
 		let items = sortedArticles.map { ArticlePasteboardWriter(article: $0) }
-		let sharingServicePicker = NSSharingServicePicker(items: items)
-		sharingServicePicker.delegate = sharingServicePickerDelegate
-		sharingServicePicker.show(relativeTo: view.bounds, of: view, preferredEdge: .minY)
+
+		detailViewController?.fetchSelectedHTML { selectedHTML in
+			self.sharingServicePickerDelegate?.selectedHTML = selectedHTML
+			let sharingServicePicker = NSSharingServicePicker(items: items)
+			sharingServicePicker.delegate = self.sharingServicePickerDelegate
+			sharingServicePicker.show(relativeTo: anchorRect, of: anchorView, preferredEdge: .minY)
+		}
 	}
 
 	@IBAction func moveFocusToSearchField(_ sender: Any?) {
+		// The search field lives in the toolbar — show it if hidden.
+		// <https://github.com/Ranchero-Software/NetNewsWire/issues/4896>
+		if let toolbar = window?.toolbar, !toolbar.isVisible {
+			toolbar.isVisible = true
+		}
 		guard let searchField = currentSearchField else {
 			return
 		}
@@ -552,6 +643,22 @@ final class MainWindowController: NSWindowController, NSUserInterfaceValidations
 
 	@IBAction func toggleReadArticlesFilter(_ sender: Any?) {
 		timelineContainerViewController?.toggleReadFilter()
+	}
+
+	@IBAction func sortArticlesByField(_ sender: NSMenuItem) {
+		// The menu item’s identifier is the ArticleSortKey raw value.
+		guard let identifier = sender.identifier, let key = ArticleSortKey(rawValue: identifier.rawValue) else {
+			return
+		}
+		timelineContainerViewController?.sortBy(key: key)
+	}
+
+	@IBAction func sortArticlesAscending(_ sender: Any?) {
+		timelineContainerViewController?.setSortDirection(.orderedAscending)
+	}
+
+	@IBAction func sortArticlesDescending(_ sender: Any?) {
+		timelineContainerViewController?.setSortDirection(.orderedDescending)
 	}
 
 	@IBAction  func performFindPanelAction(_ sender: Any?) {
@@ -636,7 +743,7 @@ extension MainWindowController: TimelineContainerViewControllerDelegate {
 		if let articles = articles {
 			if articles.count == 1 {
 				activityManager.reading(feed: nil, article: articles.first)
-				if articles.first?.feed?.isArticleExtractorAlwaysOn ?? false {
+				if articles.first?.feed?.readerViewAlwaysEnabled == true {
 					detailState = .loading
 					startArticleExtractorForCurrentLink()
 				} else {
@@ -651,6 +758,7 @@ extension MainWindowController: TimelineContainerViewControllerDelegate {
 		}
 
 		detailViewController?.setState(detailState, mode: mode)
+		updateStatusBarLink()
 	}
 
 	func timelineRequestedFeedSelection(_: TimelineContainerViewController, feed: Feed) {
@@ -768,6 +876,52 @@ extension MainWindowController: ScriptingMainWindowController {
     var scriptingSelectedArticles: [Article] {
         selectedArticles ?? []
     }
+
+    var scriptingSelectedFeeds: [Feed] {
+        selectedObjectsInSidebar()?.compactMap { $0 as? Feed } ?? []
+    }
+}
+
+// MARK: - DetailViewControllerDelegate
+
+extension MainWindowController: DetailViewControllerDelegate {
+
+	func detailViewController(_ detailViewController: DetailViewController, mouseoverLinkDidChange link: String?) {
+		mouseoverLink = link
+	}
+}
+
+// MARK: - MainWindowStatusBarViewDelegate
+
+extension MainWindowController: MainWindowStatusBarViewDelegate {
+
+	func statusBarViewGearMenu(_ statusBarView: MainWindowStatusBarView) -> NSMenu? {
+		guard let menu = sidebarViewController?.statusBarMenu() else {
+			return nil
+		}
+
+		var index = 0
+		if AccountManager.shared.canRefresh {
+			menu.insertItem(withTitle: NSLocalizedString("Refresh", comment: "Refresh"), action: #selector(AppDelegate.refreshAll(_:)), keyEquivalent: "", at: index)
+			index += 1
+		}
+
+		let isSidebarHidden = sidebarSplitViewItem?.isCollapsed ?? false
+		let sidebarTitle = isSidebarHidden ? NSLocalizedString("Show Sidebar", comment: "Command") : NSLocalizedString("Hide Sidebar", comment: "Command")
+		menu.insertItem(withTitle: sidebarTitle, action: #selector(NSSplitViewController.toggleSidebar(_:)), keyEquivalent: "", at: index)
+		menu.insertItem(NSMenuItem.separator(), at: index + 1)
+
+		return menu
+	}
+
+	func statusBarView(_ statusBarView: MainWindowStatusBarView, moveSidebarDividerTo position: CGFloat) {
+		guard let splitView = splitViewController?.splitView else {
+			return
+		}
+		let positionInWindow = statusBarView.convert(NSPoint(x: position, y: 0), to: nil)
+		let positionInSplitView = splitView.convert(positionInWindow, from: nil)
+		splitView.setPosition(positionInSplitView.x, ofDividerAt: 0)
+	}
 }
 
 // MARK: - NSToolbarDelegate
@@ -811,7 +965,7 @@ extension MainWindowController: NSToolbarDelegate {
 			return toolbarItem
 
 		case .markAllAsRead:
-			let title = NSLocalizedString("Mark All as Read", comment: "Mark All as Read")
+			let title = NSLocalizedString("Mark All as Read", comment: "Command")
 			return buildToolbarButton(.markAllAsRead, title, Assets.Images.markAllAsRead, "markAllAsRead:")
 
 		case .toggleReadArticlesFilter:
@@ -819,10 +973,23 @@ extension MainWindowController: NSToolbarDelegate {
 			return buildToolbarButton(.toggleReadArticlesFilter, title, Assets.Images.filterInactive, "toggleReadArticlesFilter:")
 
 		case .timelineTrackingSeparator:
-			return NSTrackingSeparatorToolbarItem(identifier: .timelineTrackingSeparator, splitView: splitViewController!.splitView, dividerIndex: 1)
+			// Only the standard layout has a vertical divider between the timeline and the article view.
+			// Column layout gets a hidden placeholder so the identifier stays in the saved configuration
+			// and the separator returns when the layout does — one toolbar, one customization.
+			guard timelineLayout == .standard, let splitView = splitViewController?.splitView else {
+				let placeholder = NSToolbarItem(itemIdentifier: .timelineTrackingSeparator)
+				placeholder.isHidden = true
+				// Hidden in the toolbar, but the customization palette still lists it, so it needs a name and an image there.
+				let description = NSLocalizedString("Timeline Separator", comment: "Toolbar item")
+				placeholder.label = description
+				placeholder.paletteLabel = description
+				placeholder.image = NSImage(systemSymbolName: "rectangle.split.2x1", accessibilityDescription: description)
+				return placeholder
+			}
+			return NSTrackingSeparatorToolbarItem(identifier: .timelineTrackingSeparator, splitView: splitView, dividerIndex: 1)
 
 		case .markRead:
-			let title = NSLocalizedString("Mark Read", comment: "Mark Read")
+			let title = NSLocalizedString("Mark Read", comment: "command")
 			return buildToolbarButton(.markRead, title, Assets.Images.readClosed, "toggleRead:")
 
 		case .markStar:
@@ -842,22 +1009,26 @@ extension MainWindowController: NSToolbarDelegate {
 			let button = ArticleExtractorButton()
 			button.action = #selector(toggleArticleExtractor(_:))
 			toolbarItem.view = button
+			toolbarItem.menuFormRepresentation = NSMenuItem(title: description, action: #selector(toggleArticleExtractor(_:)), keyEquivalent: "")
 			return toolbarItem
 
 		case .share:
-			let title = NSLocalizedString("Share", comment: "Share")
+			let title = NSLocalizedString("Share", comment: "Share button")
 			return buildToolbarButton(.share, title, Assets.Images.share, "toolbarShowShareMenu:")
 
 		case .openInBrowser:
-			let title = NSLocalizedString("Open in Browser", comment: "Open in Browser")
+			let title = NSLocalizedString("Open in Browser", comment: "Command")
 			return buildToolbarButton(.openInBrowser, title, Assets.Images.openInBrowser, "openArticleInBrowser:")
 
 		case .articleThemeMenu:
-			articleThemeMenuToolbarItem.image = Assets.Images.articleTheme
+			// Built per toolbar: a toolbar item belongs to one toolbar, and the toolbar is rebuilt on a layout switch.
+			let toolbarItem = NSMenuToolbarItem(itemIdentifier: .articleThemeMenu)
+			toolbarItem.image = Assets.Images.articleTheme
 			let description = NSLocalizedString("Article Theme", comment: "Article Theme")
-			articleThemeMenuToolbarItem.toolTip = description
-			articleThemeMenuToolbarItem.label = description
-			return articleThemeMenuToolbarItem
+			toolbarItem.toolTip = description
+			toolbarItem.label = description
+			toolbarItem.menu = ArticleThemesManager.shared.makeArticleThemeMenu()
+			return toolbarItem
 
 		case .search:
 			let toolbarItem = NSSearchToolbarItem(itemIdentifier: .search)
@@ -867,7 +1038,7 @@ extension MainWindowController: NSToolbarDelegate {
 			return toolbarItem
 
 		case .cleanUp:
-			let title = NSLocalizedString("Clean Up", comment: "Clean Up")
+			let title = NSLocalizedString("Clean Up", comment: "Clean Up button")
 			return buildToolbarButton(.cleanUp, title, Assets.Images.cleanUp, "cleanUp:")
 
 		default:
@@ -956,11 +1127,173 @@ extension MainWindowController: NSToolbarDelegate {
 
 private extension MainWindowController {
 
-	var splitViewController: NSSplitViewController? {
-		guard let viewController = contentViewController else {
-			return nil
+	// MARK: - Layout
+
+	/// Builds the split views for `layout` around the existing panes, replacing any current ones.
+	/// Selection, loaded articles, and the article view’s web view all survive, since the panes are reparented, not recreated.
+	func installSplitViewController(for layout: TimelineLayout) {
+		guard let window, let sidebarViewController, let timelineContainerViewController, let detailViewController else {
+			return
 		}
-		return viewController.children.first as? NSSplitViewController
+
+		rememberCurrentLayoutGeometry()
+		let savedFrame = window.frame
+		let isSidebarHidden = sidebarSplitViewItem?.isCollapsed ?? false
+		let firstResponderView = window.firstResponder as? NSView
+
+		// The toolbar lives for the window’s life so the user’s customization is one thing. Only its tracking separators
+		// depend on the split views: they come out before the swap and go back in the same positions after,
+		// which also lets the timeline separator change kind for the new layout. The toolbar is hidden meanwhile —
+		// AppKit lays out its title area during the swap and reports conflicting constraints without the separators.
+		let trackingSeparators = removeTrackingSeparatorsFromToolbar()
+		let isToolbarVisible = window.toolbar?.isVisible ?? true
+		window.toolbar?.isVisible = false
+
+		detachSplitViewControllers()
+
+		let newSplitViewController: NSSplitViewController
+		switch layout {
+		case .standard:
+			newSplitViewController = makeStandardSplitViewController(sidebar: sidebarViewController, timeline: timelineContainerViewController, detail: detailViewController)
+		case .column:
+			let columnLayoutSplitViewControllers = makeColumnLayoutSplitViewControllers(sidebar: sidebarViewController, timeline: timelineContainerViewController, detail: detailViewController)
+			newSplitViewController = columnLayoutSplitViewControllers.split
+			contentSplitViewController = columnLayoutSplitViewControllers.content
+		}
+		splitViewController = newSplitViewController
+		timelineLayout = layout
+		if window.contentViewController !== mainWindowContentViewController {
+			window.contentViewController = mainWindowContentViewController
+		}
+		mainWindowContentViewController.splitViewController = newSplitViewController
+		if window.frame != savedFrame && !window.styleMask.contains(.fullScreen) {
+			window.setFrame(savedFrame, display: false)
+		}
+
+		if let toolbar = window.toolbar {
+			for (identifier, index) in trackingSeparators {
+				toolbar.insertItem(withItemIdentifier: identifier, at: index)
+			}
+			toolbar.isVisible = isToolbarVisible
+		} else {
+			window.toolbar = makeToolbar()
+		}
+
+		window.contentView?.layoutSubtreeIfNeeded()
+		applyRememberedGeometry()
+		sidebarSplitViewItem?.isCollapsed = isSidebarHidden
+
+		if let firstResponderView, firstResponderView.window === window {
+			window.makeFirstResponder(firstResponderView)
+		} else {
+			currentTimelineViewController?.focus()
+		}
+		window.recalculateKeyViewLoop()
+		observeSplitViewForStatusBar()
+		invalidateRestorableState()
+	}
+
+	/// Removes the sidebar and timeline tracking separators, returning their identifiers and positions in ascending order.
+	func removeTrackingSeparatorsFromToolbar() -> [(NSToolbarItem.Identifier, Int)] {
+		guard let toolbar = window?.toolbar else {
+			return []
+		}
+		let separatorIdentifiers: Set<NSToolbarItem.Identifier> = [.sidebarTrackingSeparator, .timelineTrackingSeparator]
+		let separators = toolbar.items.enumerated().filter { separatorIdentifiers.contains($0.element.itemIdentifier) }.map { ($0.element.itemIdentifier, $0.offset) }
+		for (_, index) in separators.reversed() {
+			toolbar.removeItem(at: index)
+		}
+		return separators
+	}
+
+	func detachSplitViewControllers() {
+		// NSSplitViewItem requires a parentless view controller, so remove the panes from the old split views first.
+		if let contentSplitViewController {
+			for item in contentSplitViewController.splitViewItems.reversed() {
+				contentSplitViewController.removeSplitViewItem(item)
+			}
+		}
+		if let splitViewController {
+			for item in splitViewController.splitViewItems.reversed() {
+				splitViewController.removeSplitViewItem(item)
+			}
+		}
+		contentSplitViewController = nil
+		splitViewController = nil
+	}
+
+	func makeStandardSplitViewController(sidebar: SidebarViewController, timeline: TimelineContainerViewController, detail: DetailViewController) -> NSSplitViewController {
+		let splitViewController = makeEmptySplitViewController(isVertical: true)
+
+		let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebar)
+		sidebarItem.holdingPriority = NSLayoutConstraint.Priority(Self.sidebarHoldingPriority)
+
+		let timelineItem = NSSplitViewItem(contentListWithViewController: timeline)
+		timelineItem.holdingPriority = NSLayoutConstraint.Priority(Self.timelineHoldingPriority)
+		if #available(macOS 26.0, *) {
+			timelineItem.automaticallyAdjustsSafeAreaInsets = true
+		}
+
+		let detailItem = NSSplitViewItem(viewController: detail)
+		detailItem.minimumThickness = CGFloat(Self.detailViewMinimumWidth)
+		if #unavailable(macOS 26.0) {
+			detailItem.titlebarSeparatorStyle = .line
+		}
+
+		splitViewController.splitViewItems = [sidebarItem, timelineItem, detailItem]
+		sidebar.splitViewItem = sidebarItem
+		return splitViewController
+	}
+
+	/// Returns the outer split (sidebar and content) and the content split (timeline above detail) it contains.
+	func makeColumnLayoutSplitViewControllers(sidebar: SidebarViewController, timeline: TimelineContainerViewController, detail: DetailViewController) -> (split: NSSplitViewController, content: NSSplitViewController) {
+		let contentSplitViewController = makeEmptySplitViewController(isVertical: false, splitView: ColumnLayoutSplitView())
+		contentSplitViewController.splitView.dividerStyle = .paneSplitter
+
+		let timelineItem = NSSplitViewItem(viewController: timeline)
+		timelineItem.holdingPriority = NSLayoutConstraint.Priority(Self.timelineHoldingPriority)
+		timelineItem.minimumThickness = Self.timelineMinimumHeight
+		timelineItem.canCollapse = false
+
+		let detailItem = NSSplitViewItem(viewController: detail)
+		detailItem.minimumThickness = Self.detailViewMinimumHeight
+		detailItem.canCollapse = false
+
+		contentSplitViewController.splitViewItems = [timelineItem, detailItem]
+
+		let splitViewController = makeEmptySplitViewController(isVertical: true)
+
+		let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebar)
+		sidebarItem.holdingPriority = NSLayoutConstraint.Priority(Self.sidebarHoldingPriority)
+
+		let contentItem = NSSplitViewItem(viewController: contentSplitViewController)
+		if #available(macOS 26.0, *) {
+			contentItem.automaticallyAdjustsSafeAreaInsets = true
+		} else {
+			contentItem.titlebarSeparatorStyle = .line
+		}
+
+		splitViewController.splitViewItems = [sidebarItem, contentItem]
+		sidebar.splitViewItem = sidebarItem
+		return (splitViewController, contentSplitViewController)
+	}
+
+	func makeEmptySplitViewController(isVertical: Bool, splitView: NSSplitView = MainWindowSplitView()) -> NSSplitViewController {
+		let splitViewController = NSSplitViewController()
+		splitViewController.splitView = splitView
+		splitViewController.splitView.isVertical = isVertical
+		splitViewController.splitView.dividerStyle = .thin
+		splitViewController.splitView.wantsLayer = true
+		return splitViewController
+	}
+
+	func makeToolbar() -> NSToolbar {
+		let toolbar = NSToolbar(identifier: Self.toolbarIdentifier)
+		toolbar.allowsUserCustomization = true
+		toolbar.autosavesConfiguration = true
+		toolbar.displayMode = .iconOnly
+		toolbar.delegate = self
+		return toolbar
 	}
 
 	var currentTimelineViewController: TimelineViewController? {
@@ -972,11 +1305,7 @@ private extension MainWindowController {
 	}
 
 	var sidebarSplitViewItem: NSSplitViewItem? {
-		return splitViewController?.splitViewItems[0]
-	}
-
-	var detailSplitViewItem: NSSplitViewItem? {
-		return splitViewController?.splitViewItems[2]
+		splitViewController?.splitViewItems.first
 	}
 
 	var selectedArticles: [Article]? {
@@ -998,43 +1327,108 @@ private extension MainWindowController {
 
 	func savableState() -> MainWindowState {
 		let isFullScreen = window?.styleMask.contains(.fullScreen) ?? false
-
 		let isSidebarHidden = sidebarSplitViewItem?.isCollapsed ?? false
-		let splitViewWidths: [Int]
-		if let splitView = splitViewController?.splitView, let window {
-			let dividerThickness = splitView.dividerThickness
-			let sidebarWidth: CGFloat
-			let detailWidth: CGFloat
 
-			// Starting with macOS 26, timelineWidth has to be calculated —
-			// because its width is greater than its apparent width,
-			// so that things can slide under the sidebar.
-			let timelineWidth: CGFloat
-			if isSidebarHidden {
-				sidebarWidth = 0.0
-				detailWidth = splitView.arrangedSubviews[2].frame.width
-				timelineWidth = window.frame.width - (detailWidth + dividerThickness)
-			} else {
-				sidebarWidth = splitView.arrangedSubviews[0].frame.width
-				detailWidth = splitView.arrangedSubviews[2].frame.width
-				timelineWidth = window.frame.width - (sidebarWidth + detailWidth + (dividerThickness * 2))
-			}
-			splitViewWidths = [Int(floor(sidebarWidth)), Int(floor(timelineWidth)), Int(floor(detailWidth))]
-		} else {
-			splitViewWidths = []
-		}
+		rememberCurrentLayoutGeometry()
 
 		return MainWindowState(isFullScreen: isFullScreen,
-							   splitViewWidths: splitViewWidths,
+							   splitViewWidths: rememberedStandardLayoutWidths,
+							   columnLayoutTimelineHeight: rememberedColumnLayoutTimelineHeight,
 							   isSidebarHidden: isSidebarHidden,
 							   sidebarWindowState: sidebarViewController?.windowState,
 							   timelineWindowState: timelineContainerViewController?.windowState,
 							   detailWindowState: detailViewController?.windowState)
 	}
 
+	/// Reads the live split view positions into the remembered geometry for the current layout.
+	/// The sidebar is shared by both layouts, so its width is always refreshed.
+	func rememberCurrentLayoutGeometry() {
+		guard let splitView = splitViewController?.splitView, let window, let sidebarView = splitView.arrangedSubviews.first else {
+			return
+		}
+		let dividerThickness = splitView.dividerThickness
+		let isSidebarHidden = sidebarSplitViewItem?.isCollapsed ?? false
+		let visibleSidebarWidth = isSidebarHidden ? 0.0 : sidebarView.frame.width
+		// While collapsed, keep the last visible width so a rebuilt split view can reopen the sidebar at that width.
+		let previousSidebarWidth = rememberedStandardLayoutWidths.count == 3 ? rememberedStandardLayoutWidths[0] : 0
+		let sidebarWidth = isSidebarHidden ? previousSidebarWidth : Int(floor(visibleSidebarWidth))
+
+		switch timelineLayout {
+		case .standard:
+			guard splitView.arrangedSubviews.count == 3 else {
+				return
+			}
+			let detailWidth = splitView.arrangedSubviews[2].frame.width
+			// Starting with macOS 26, timelineWidth has to be calculated —
+			// because its width is greater than its apparent width,
+			// so that things can slide under the sidebar.
+			let dividerCount: CGFloat = isSidebarHidden ? 1.0 : 2.0
+			let timelineWidth = window.frame.width - (visibleSidebarWidth + detailWidth + (dividerThickness * dividerCount))
+			rememberedStandardLayoutWidths = [sidebarWidth, Int(floor(timelineWidth)), Int(floor(detailWidth))]
+
+		case .column:
+			if rememberedStandardLayoutWidths.count == 3 {
+				rememberedStandardLayoutWidths[0] = sidebarWidth
+			} else {
+				rememberedStandardLayoutWidths = [sidebarWidth, 0, 0]
+			}
+			if let timelineView = contentSplitViewController?.splitView.arrangedSubviews.first {
+				rememberedColumnLayoutTimelineHeight = Int(floor(timelineView.frame.height))
+			}
+		}
+	}
+
+	func applyRememberedGeometry() {
+		guard let splitView = splitViewController?.splitView else {
+			return
+		}
+		let widths = rememberedStandardLayoutWidths
+
+		switch timelineLayout {
+		case .standard:
+			guard widths.count == 3 else {
+				return
+			}
+			let sidebarWidth = CGFloat(widths[0])
+			let timelineWidth = CGFloat(widths[1])
+			// The sidebar is positioned expanded here and collapsed by the caller afterward. A zero sidebar width
+			// comes from state saved before the collapsed width was kept (7.1.x) — keep the default width.
+			if sidebarWidth > 0 {
+				splitView.setPosition(sidebarWidth, ofDividerAt: 0)
+			}
+			// A zero timeline width means the standard layout has never been laid out — leave it to the holding priorities.
+			if timelineWidth > 0 {
+				let secondDividerPosition = sidebarWidth > 0 ? sidebarWidth + splitView.dividerThickness + timelineWidth : timelineWidth
+				splitView.setPosition(secondDividerPosition, ofDividerAt: 1)
+			}
+
+		case .column:
+			if widths.count == 3 && widths[0] > 0 {
+				splitView.setPosition(CGFloat(widths[0]), ofDividerAt: 0)
+			}
+			guard let contentSplitView = contentSplitViewController?.splitView else {
+				return
+			}
+			let timelineHeight: CGFloat
+			if rememberedColumnLayoutTimelineHeight > 0 {
+				timelineHeight = CGFloat(rememberedColumnLayoutTimelineHeight)
+			} else {
+				timelineHeight = floor(contentSplitView.bounds.height * Self.defaultColumnLayoutTimelineHeightFraction)
+			}
+			contentSplitView.setPosition(timelineHeight, ofDividerAt: 0)
+		}
+	}
+
 	func restoreState(from state: MainWindowState) {
 		if state.isFullScreen {
-			window?.toggleFullScreen(self)
+			// Defer the toggle — during launch the window isn't on screen yet,
+			// and AppKit ignores toggleFullScreen for windows not yet on screen.
+			Task { @MainActor in
+				guard let window = self.window, !window.styleMask.contains(.fullScreen) else {
+					return
+				}
+				window.toggleFullScreen(nil)
+			}
 		}
 		restoreSplitViewState(from: state)
 
@@ -1108,6 +1502,14 @@ private extension MainWindowController {
 		guard let timelineViewController = currentTimelineViewController, let sidebarViewController = sidebarViewController else {
 			return false
 		}
+
+		// When the only unread article in the account is the one already selected, Next Unread has nowhere to go.
+		// This state persists on Mac when the selected article is marked read on selection and then manually marked unread again.
+		// <https://github.com/Ranchero-Software/NetNewsWire/issues/5008>
+		if AccountManager.shared.unreadCount == 1, timelineViewController.selectedArticles.count == 1, let article = timelineViewController.selectedArticles.first, !article.status.read {
+			return false
+		}
+
 		// TODO: handle search mode
 		return timelineViewController.canGoToNextUnread(wrappingToTop: wrapping) || sidebarViewController.canGoToNextUnread(wrappingToTop: wrapping)
 	}
@@ -1139,6 +1541,10 @@ private extension MainWindowController {
 
 		if let toolbarItem = item as? NSToolbarItem {
 			toolbarItem.toolTip = commandName
+			// Text Only toolbar mode shows the label and menu form representation, so they need to track state too.
+			let shortName = markingRead ? NSLocalizedString("Mark Read", comment: "command") : NSLocalizedString("Mark Unread", comment: "command")
+			toolbarItem.label = shortName
+			toolbarItem.menuFormRepresentation?.title = shortName
 		}
 
 		if let menuItem = item as? NSMenuItem {
@@ -1153,7 +1559,7 @@ private extension MainWindowController {
 	}
 
 	func validateToggleArticleExtractor(_ item: NSValidatedUserInterfaceItem) -> Bool {
-		guard !AppDefaults.shared.isDeveloperBuild else {
+		guard !AppDefaults.isDeveloperBuild else {
 			return false
 		}
 
@@ -1182,7 +1588,7 @@ private extension MainWindowController {
 			toolbarButton.buttonState = isShowingExtractedArticle ? .on : .off
 		}
 
-		return true
+		return state != .processing
 	}
 
 	func canMarkAboveArticlesAsRead() -> Bool {
@@ -1223,6 +1629,10 @@ private extension MainWindowController {
 
 		if let toolbarItem = item as? NSToolbarItem {
 			toolbarItem.toolTip = commandName
+			// Text Only toolbar mode shows the label and menu form representation, so they need to track state too.
+			let shortName = starring ? NSLocalizedString("Star", comment: "Star") : NSLocalizedString("Unstar", comment: "Unstar")
+			toolbarItem.label = shortName
+			toolbarItem.menuFormRepresentation?.title = shortName
 		}
 
 		if let menuItem = item as? NSMenuItem {
@@ -1246,6 +1656,24 @@ private extension MainWindowController {
 		let showCommand = NSLocalizedString("Show Read Feeds", comment: "Command")
 		let hideCommand = NSLocalizedString("Hide Read Feeds", comment: "Command")
 		menuItem.title = sidebarViewController?.isReadFiltered ?? false ? showCommand : hideCommand
+		return true
+	}
+
+	func validateSortArticlesByField(_ item: NSValidatedUserInterfaceItem) -> Bool {
+		guard let sortParameters = timelineContainerViewController?.sortParameters, let menuItem = item as? NSMenuItem, let identifier = menuItem.identifier, let key = ArticleSortKey(rawValue: identifier.rawValue) else {
+			return false
+		}
+		menuItem.state = sortParameters.key == key ? .on : .off
+		return true
+	}
+
+	/// The direction items are worded for the current field: Oldest/Newest for date, A to Z for text, Ascending/Descending for flags.
+	func validateSortDirection(_ item: NSValidatedUserInterfaceItem, direction: ComparisonResult) -> Bool {
+		guard let sortParameters = timelineContainerViewController?.sortParameters, let menuItem = item as? NSMenuItem else {
+			return false
+		}
+		menuItem.title = sortParameters.key.localizedDirectionTitle(ascending: direction == .orderedAscending)
+		menuItem.state = sortParameters.direction == direction ? .on : .off
 		return true
 	}
 
@@ -1310,6 +1738,10 @@ private extension MainWindowController {
 		}
 
 		func setSubtitle(_ count: Int) {
+			guard AppDefaults.unreadCountDisplay == .count else {
+				window?.subtitle = ""
+				return
+			}
 			let localizedLabel = NSLocalizedString("%d unread", comment: "Unread")
 			let formattedLabel = NSString.localizedStringWithFormat(localizedLabel as NSString, count)
 			window?.subtitle = formattedLabel as String
@@ -1317,7 +1749,7 @@ private extension MainWindowController {
 
 		guard let selectedObjects = selectedObjectsInSidebar(), selectedObjects.count > 0 else {
 			window?.title = appName
-			setSubtitle(appDelegate.unreadCount)
+			setSubtitle(AccountManager.shared.unreadCount)
 			return
 		}
 
@@ -1351,26 +1783,12 @@ private extension MainWindowController {
 	}
 
 	func restoreSplitViewState(from state: MainWindowState) {
-		guard let splitView = splitViewController?.splitView,
-			  state.splitViewWidths.count == 3
-		else {
-			return
+		if state.splitViewWidths.count == 3 {
+			rememberedStandardLayoutWidths = state.splitViewWidths
 		}
-
-		let dividerThickness = splitView.dividerThickness
-		let isSidebarHidden = state.isSidebarHidden
-		let sidebarWidth = CGFloat(state.splitViewWidths[0])
-		let timelineWidth = CGFloat(state.splitViewWidths[1])
-
-		if isSidebarHidden {
-			splitView.setPosition(0.0, ofDividerAt: 0)
-			splitView.setPosition(timelineWidth, ofDividerAt: 1)
-		} else {
-			splitView.setPosition(sidebarWidth, ofDividerAt: 0)
-			splitView.setPosition(sidebarWidth + dividerThickness + timelineWidth, ofDividerAt: 1)
-		}
-
-		sidebarSplitViewItem?.isCollapsed = isSidebarHidden
+		rememberedColumnLayoutTimelineHeight = state.columnLayoutTimelineHeight
+		applyRememberedGeometry()
+		sidebarSplitViewItem?.isCollapsed = state.isSidebarHidden
 	}
 
 	/// Restore main window split view using legacy state restoration data.
@@ -1390,12 +1808,12 @@ private extension MainWindowController {
 		let timelineWidth: Int = widths[1]
 
 		// Make sure the detail view has its minimum thickness, at least.
-		if windowWidth < sidebarWidth + dividerThickness + timelineWidth + dividerThickness + MainWindowController.detailViewMinimumThickness {
+		if windowWidth < sidebarWidth + dividerThickness + timelineWidth + dividerThickness + Self.detailViewMinimumWidth {
 			return
 		}
 
-		splitView.setPosition(CGFloat(sidebarWidth), ofDividerAt: 0)
-		splitView.setPosition(CGFloat(sidebarWidth + dividerThickness + timelineWidth), ofDividerAt: 1)
+		rememberedStandardLayoutWidths = widths
+		applyRememberedGeometry()
 
 		let isSidebarHidden = state[UserInfoKey.isSidebarHidden] as? Bool ?? false
 
@@ -1417,6 +1835,8 @@ private extension MainWindowController {
 		toolbarItem.view = button
 		toolbarItem.toolTip = title
 		toolbarItem.label = title
+		// A menu form representation keeps view-based items working in the toolbar's Text Only mode and overflow menu.
+		toolbarItem.menuFormRepresentation = NSMenuItem(title: title, action: Selector((selector)), keyEquivalent: "")
 		return toolbarItem
 	}
 
@@ -1424,12 +1844,12 @@ private extension MainWindowController {
 		let menu = NSMenu()
 
 		let newFeedItem = NSMenuItem()
-		newFeedItem.title = NSLocalizedString("New Feed…", comment: "New Feed")
+		newFeedItem.title = NSLocalizedString("New Feed…", comment: "Command")
 		newFeedItem.action = #selector(AppDelegate.showAddFeedWindow(_:))
 		menu.addItem(newFeedItem)
 
 		let newFolderFeedItem = NSMenuItem()
-		newFolderFeedItem.title = NSLocalizedString("New Folder…", comment: "New Folder")
+		newFolderFeedItem.title = NSLocalizedString("New Folder…", comment: "Command")
 		newFolderFeedItem.action = #selector(AppDelegate.showAddFolderWindow(_:))
 		menu.addItem(newFolderFeedItem)
 
@@ -1437,25 +1857,58 @@ private extension MainWindowController {
 	}
 
 	func updateArticleThemeMenu() {
-		let articleThemeMenu = NSMenu()
-
-		let defaultThemeItem = NSMenuItem()
-		defaultThemeItem.title = ArticleTheme.defaultTheme.name
-		defaultThemeItem.action = #selector(selectArticleTheme(_:))
-		defaultThemeItem.state = defaultThemeItem.title == ArticleThemesManager.shared.currentThemeName ? .on : .off
-		articleThemeMenu.addItem(defaultThemeItem)
-
-		articleThemeMenu.addItem(NSMenuItem.separator())
-
-		for themeName in ArticleThemesManager.shared.themeNames {
-			let themeItem = NSMenuItem()
-			themeItem.title = themeName
-			themeItem.action = #selector(selectArticleTheme(_:))
-			themeItem.state = themeItem.title == ArticleThemesManager.shared.currentThemeName ? .on : .off
-			articleThemeMenu.addItem(themeItem)
+		guard let toolbarItem = window?.toolbar?.existingItem(withIdentifier: .articleThemeMenu) as? NSMenuToolbarItem else {
+			return
 		}
+		toolbarItem.menu = ArticleThemesManager.shared.makeArticleThemeMenu()
+	}
 
-		articleThemeMenuToolbarItem.menu = articleThemeMenu
-		articleThemePopUpButton?.menu = articleThemeMenu
+	// MARK: - Status Bar
+
+	/// The status bar, when showing, takes the place of the detail view’s floating link overlay and the sidebar’s progress view.
+	func updateStatusBarVisibility() {
+		let showStatusBar = AppDefaults.showStatusBar
+		mainWindowContentViewController.isStatusBarHidden = !showStatusBar
+		detailViewController?.showsMouseoverLinkOverlay = !showStatusBar
+		sidebarViewController?.showsProgressView = !showStatusBar
+	}
+
+	func updateStatusBarLink() {
+		mainWindowContentViewController.statusBarView.link = mouseoverLink ?? currentLink
+	}
+
+	/// Tracks the sidebar divider in the status bar. Call after the split view controller is replaced.
+	func observeSplitViewForStatusBar() {
+		NotificationCenter.default.removeObserver(self, name: NSSplitView.didResizeSubviewsNotification, object: nil)
+		if let splitView = splitViewController?.splitView {
+			NotificationCenter.default.addObserver(self, selector: #selector(handleSplitViewDidResizeSubviews(_:)), name: NSSplitView.didResizeSubviewsNotification, object: splitView)
+		}
+		updateStatusBarSidebarDivider()
+	}
+
+	@objc func handleSplitViewDidResizeSubviews(_ notification: Notification) {
+		updateStatusBarSidebarDivider()
+	}
+
+	func updateStatusBarSidebarDivider() {
+		let statusBarView = mainWindowContentViewController.statusBarView
+		guard let sidebarSplitViewItem, !sidebarSplitViewItem.isCollapsed, let splitView = splitViewController?.splitView, let sidebarPane = splitView.arrangedSubviews.first else {
+			statusBarView.sidebarDividerPosition = nil
+			return
+		}
+		// Use the split view’s sidebar pane, not the sidebar view: while the sidebar slides in,
+		// the sidebar view’s position lags a step behind the pane and isn’t updated after the last resize.
+		let dividerPositionInStatusBar = statusBarView.convert(NSPoint(x: sidebarPane.frame.maxX, y: 0), from: splitView)
+
+		// Starting with macOS 26, the content beside the sidebar extends under it, and the divider is a hairline
+		// at the sidebar’s trailing edge. Before that, the divider follows the sidebar.
+		let arrangedSubviews = splitView.arrangedSubviews
+		if arrangedSubviews.count > 1 {
+			let contentExtendsUnderSidebar = arrangedSubviews[1].frame.minX < sidebarPane.frame.maxX
+			let hairline = 1 / (window?.backingScaleFactor ?? 1)
+			statusBarView.sidebarDividerLineOffset = contentExtendsUnderSidebar ? -hairline : 0
+			statusBarView.sidebarDividerLineWidth = contentExtendsUnderSidebar ? hairline : splitView.dividerThickness
+		}
+		statusBarView.sidebarDividerPosition = dividerPositionInStatusBar.x
 	}
 }

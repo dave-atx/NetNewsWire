@@ -7,9 +7,13 @@
 //
 
 import Foundation
+import os
 import RSCore
+import RSDatabase
 import Account
 import Articles
+import ErrorLog
+import Images
 
 // Main thread only.
 // Runs an asynchronous fetch.
@@ -30,12 +34,14 @@ typealias FetchRequestOperationResultBlock = (Set<Article>, FetchRequestOperatio
 	var isCanceled = false
 	var isFinished = false
 	private let fetchers: [ArticleFetcher]
+	private let findsThumbnailURLs: Bool
 
-	init(id: Int, readFilterEnabledTable: [SidebarItemIdentifier: Bool], fetchers: [ArticleFetcher], resultBlock: @escaping FetchRequestOperationResultBlock) {
+	init(id: Int, readFilterEnabledTable: [SidebarItemIdentifier: Bool], fetchers: [ArticleFetcher], findsThumbnailURLs: Bool, resultBlock: @escaping FetchRequestOperationResultBlock) {
 		precondition(Thread.isMainThread)
 		self.id = id
 		self.readFilterEnabledTable = readFilterEnabledTable
 		self.fetchers = fetchers
+		self.findsThumbnailURLs = findsThumbnailURLs
 		self.resultBlock = resultBlock
 	}
 
@@ -65,11 +71,13 @@ typealias FetchRequestOperationResultBlock = (Set<Article>, FetchRequestOperatio
 				return
 			}
 
+			Self.logger.debug("FetchRequestOperation \(self.id, privacy: .public): run starting — \(self.fetchers.count) fetcher(s)")
+
 			let numberOfFetchers = fetchers.count
 			var fetchersReturned = 0
 			var fetchedArticles = Set<Article>()
 
-			@MainActor func process(_ articles: Set<Article>) {
+			@MainActor func process(_ articles: Set<Article>) async {
 				precondition(Thread.isMainThread)
 				guard !self.isCanceled else {
 					callCompletionIfNeeded()
@@ -81,6 +89,13 @@ typealias FetchRequestOperationResultBlock = (Set<Article>, FetchRequestOperatio
 				fetchedArticles.formUnion(articles)
 				fetchersReturned += 1
 				if fetchersReturned == numberOfFetchers {
+					if findsThumbnailURLs {
+						await ArticleThumbnailFinder.shared.findThumbnailURLs(for: fetchedArticles)
+						guard !self.isCanceled else {
+							callCompletionIfNeeded()
+							return
+						}
+					}
 					self.isFinished = true
 					self.resultBlock(fetchedArticles, self)
 					callCompletionIfNeeded()
@@ -88,16 +103,20 @@ typealias FetchRequestOperationResultBlock = (Set<Article>, FetchRequestOperatio
 			}
 
 			for fetcher in fetchers {
+				let articles: Set<Article>
+
 				if (fetcher as? SidebarItem)?.readFiltered(readFilterEnabledTable: readFilterEnabledTable) ?? true {
-					if let articles = try? await fetcher.fetchUnreadArticlesAsync() {
-						process(articles)
-					}
+					articles = await fetcher.fetchUnreadArticlesAsync()
 				} else {
-					if let articles = try? await fetcher.fetchArticlesAsync() {
-						process(articles)
-					}
+					articles = await fetcher.fetchArticlesAsync()
 				}
+
+				await process(articles)
 			}
+
+			// Belt-and-suspenders: ensure the queue never deadlocks even if
+			// the loop above is ever refactored to skip process().
+			callCompletionIfNeeded()
 		}
 	}
 }
@@ -112,12 +131,14 @@ typealias FetchRequestOperationResultBlock = (Set<Article>, FetchRequestOperatio
 	var isCanceled = false
 	var isFinished = false
 	private let fetchers: [ArticleFetcher]
+	private let findsThumbnailURLs: Bool
 
-	init(id: Int, hidingReadArticlesState: HidingReadArticlesState, fetchers: [ArticleFetcher], resultBlock: @escaping FetchRequestOperationResultBlock) {
+	init(id: Int, hidingReadArticlesState: HidingReadArticlesState, fetchers: [ArticleFetcher], findsThumbnailURLs: Bool, resultBlock: @escaping FetchRequestOperationResultBlock) {
 		precondition(Thread.isMainThread)
 		self.id = id
 		self.hidingReadArticlesState = hidingReadArticlesState
 		self.fetchers = fetchers
+		self.findsThumbnailURLs = findsThumbnailURLs
 		self.resultBlock = resultBlock
 	}
 
@@ -147,11 +168,13 @@ typealias FetchRequestOperationResultBlock = (Set<Article>, FetchRequestOperatio
 				return
 			}
 
+			Self.logger.debug("FetchRequestOperation \(self.id, privacy: .public): run starting — \(self.fetchers.count) fetcher(s)")
+
 			let numberOfFetchers = fetchers.count
 			var fetchersReturned = 0
 			var fetchedArticles = Set<Article>()
 
-			@MainActor func process(_ articles: Set<Article>) {
+			@MainActor func process(_ articles: Set<Article>) async {
 				precondition(Thread.isMainThread)
 				guard !self.isCanceled else {
 					callCompletionIfNeeded()
@@ -163,6 +186,13 @@ typealias FetchRequestOperationResultBlock = (Set<Article>, FetchRequestOperatio
 				fetchedArticles.formUnion(articles)
 				fetchersReturned += 1
 				if fetchersReturned == numberOfFetchers {
+					if findsThumbnailURLs {
+						await ArticleThumbnailFinder.shared.findThumbnailURLs(for: fetchedArticles)
+						guard !self.isCanceled else {
+							callCompletionIfNeeded()
+							return
+						}
+					}
 					self.isFinished = true
 					self.resultBlock(fetchedArticles, self)
 					callCompletionIfNeeded()
@@ -177,18 +207,33 @@ typealias FetchRequestOperationResultBlock = (Set<Article>, FetchRequestOperatio
 			}
 
 			for fetcher in fetchers {
+				let articles: Set<Article>
 				if fetcherHidesReadArticles(fetcher) {
-					if let articles = try? await fetcher.fetchUnreadArticlesAsync() {
-						process(articles)
-					}
+					articles = await fetcher.fetchUnreadArticlesAsync()
 				} else {
-					if let articles = try? await fetcher.fetchArticlesAsync() {
-						process(articles)
-					}
+					articles = await fetcher.fetchArticlesAsync()
 				}
+				await process(articles)
 			}
+
+			// Ensure the queue never deadlocks even if
+			// the loop above is ever refactored to skip process().
+			callCompletionIfNeeded()
 		}
 	}
 }
 
 #endif
+
+private extension FetchRequestOperation {
+
+	static let logger = Logger(subsystem: Logger.nnwSubsystem, category: "FetchRequestOperation")
+	static let errorLogSourceID = 101
+
+	static func postFetchError(_ error: Error, fileName: String = #fileID, functionName: String = #function, lineNumber: Int = #line) {
+		let typeName = String(describing: type(of: error))
+		let description = "\(typeName): \(error.localizedDescription)"
+		let userInfo = ErrorLogUserInfoKey.userInfo(sourceName: "Timeline", sourceID: errorLogSourceID, operation: "Fetching articles", errorMessage: description, fileName: fileName, functionName: functionName, lineNumber: lineNumber)
+		NotificationCenter.default.post(name: .appDidEncounterError, object: nil, userInfo: userInfo)
+	}
+}

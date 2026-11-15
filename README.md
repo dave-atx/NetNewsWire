@@ -22,7 +22,7 @@ Every community member is expected to abide by the [code of conduct](CONTRIBUTIN
 
 #### Pull Requests
 
-See the [Contributing](CONTRIBUTING.md) page for our process. It’s pretty straightforward.
+See the [Contributing](CONTRIBUTING.md) page for our process. They key thing is to ask before doing a PR (before even starting work). The Contributing page goes into more detail as to why it’s important to ask first.
 
 #### Building
 
@@ -84,7 +84,7 @@ Access to [find your development team ID](/Technotes/FindingYourDevelopmentTeamI
 Set `ORGANIZATION_IDENTIFIER` to a reversed domain name that you control or have made up.
 Note that `PROVISIONING_PROFILE_SPECIFIER` should not have a value associated with it.
 
-You can now open the `NetNewsWire.xccodeproj` in Xcode.
+You can now open the `NetNewsWire.xcodeproj` in Xcode.
 
 Now you should be able to build without code signing errors and without modifying
 the NetNewsWire Xcode project.  This is a special build of NetNewsWire with some

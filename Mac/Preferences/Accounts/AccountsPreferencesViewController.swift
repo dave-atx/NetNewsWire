@@ -7,8 +7,8 @@
 //
 
 import AppKit
-import Account
 import SwiftUI
+import Account
 import RSCore
 
 // MARK: - AccountsPreferencesAddAccountDelegate
@@ -27,6 +27,14 @@ final class AccountsPreferencesViewController: NSViewController {
 	var addAccountsViewController: NSHostingController<AddAccountsView>?
 
 	private var sortedAccounts = [Account]()
+	private var isReloadingTable = false
+	private var selectedAccount: Account? {
+		account(at: tableView.selectedRow)
+	}
+
+	convenience init() {
+		self.init(nibName: "AccountsPreferencesView", bundle: nil)
+	}
 
 	override func viewDidLoad() {
 		super.viewDidLoad()
@@ -39,6 +47,8 @@ final class AccountsPreferencesViewController: NSViewController {
 		NotificationCenter.default.addObserver(self, selector: #selector(displayNameDidChange(_:)), name: .DisplayNameDidChange, object: nil)
 		NotificationCenter.default.addObserver(self, selector: #selector(accountsDidChange(_:)), name: .UserDidAddAccount, object: nil)
 		NotificationCenter.default.addObserver(self, selector: #selector(accountsDidChange(_:)), name: .UserDidDeleteAccount, object: nil)
+		NotificationCenter.default.addObserver(self, selector: #selector(handleAccountRefreshStateChanged(_:)), name: .AccountRefreshDidBegin, object: nil)
+		NotificationCenter.default.addObserver(self, selector: #selector(handleAccountRefreshStateChanged(_:)), name: .AccountRefreshDidFinish, object: nil)
 
 		// Fix tableView frame — for some reason IB wants it 1pt wider than the clip view. This leads to unwanted horizontal scrolling.
 		var rTable = tableView.frame
@@ -56,42 +66,50 @@ final class AccountsPreferencesViewController: NSViewController {
 	}
 
 	@IBAction func removeAccount(_ sender: Any) {
-
-		guard tableView.selectedRow != -1 else {
+		guard let account = selectedAccount else {
 			return
 		}
-
-		let acctName = sortedAccounts[tableView.selectedRow].nameForDisplay
+		let accountName = account.nameForDisplay
 
 		let alert = NSAlert()
 		alert.alertStyle = .warning
-		let deletePrompt = NSLocalizedString("Delete", comment: "Delete")
-		alert.messageText = "\(deletePrompt) “\(acctName)”?"
-		alert.informativeText = NSLocalizedString("Are you sure you want to delete the account “\(acctName)”? This cannot be undone.", comment: "Delete text")
+		let messageFormat = NSLocalizedString("Delete “%@”?", comment: "Delete account alert title")
+		alert.messageText = String(format: messageFormat, accountName)
+		let informativeFormat = NSLocalizedString("Are you sure you want to delete the account “%@”? This cannot be undone.", comment: "Delete account alert message")
+		alert.informativeText = String(format: informativeFormat, accountName)
 
-		alert.addButton(withTitle: NSLocalizedString("Delete", comment: "Delete Account"))
-		alert.addButton(withTitle: NSLocalizedString("Cancel", comment: "Cancel Delete Account"))
+		alert.addButton(withTitle: NSLocalizedString("Delete", comment: "Delete button"))
+		alert.addButton(withTitle: NSLocalizedString("Cancel", comment: "Cancel button"))
 
-		alert.beginSheetModal(for: view.window!) { [weak self] result in
+		guard let window = view.window else {
+			return
+		}
+		alert.beginSheetModal(for: window) { [weak self] result in
 			if result == NSApplication.ModalResponse.alertFirstButtonReturn {
-				guard let self = self else { return }
-				AccountManager.shared.deleteAccount(self.sortedAccounts[self.tableView.selectedRow])
+				guard let self else {
+					return
+				}
+				AccountManager.shared.deleteAccount(account)
 				self.hideController()
 			}
 		}
-
 	}
 
 	@objc func displayNameDidChange(_ note: Notification) {
-		updateSortedAccounts()
-		tableView.reloadData()
+		reloadTablePreservingSelection()
 	}
 
 	@objc func accountsDidChange(_ note: Notification) {
-		updateSortedAccounts()
-		tableView.reloadData()
+		if note.name == .UserDidAddAccount, let addedAccount = note.userInfo?[Account.UserInfoKey.account] as? Account {
+			reloadTable(selecting: addedAccount)
+		} else {
+			reloadTablePreservingSelection()
+		}
 	}
 
+	@objc func handleAccountRefreshStateChanged(_ note: Notification) {
+		updateDeleteButtonState()
+	}
 }
 
 // MARK: - NSTableViewDataSource
@@ -99,11 +117,11 @@ final class AccountsPreferencesViewController: NSViewController {
 extension AccountsPreferencesViewController: NSTableViewDataSource {
 
 	func numberOfRows(in tableView: NSTableView) -> Int {
-		return sortedAccounts.count
+		sortedAccounts.count
 	}
 
 	func tableView(_ tableView: NSTableView, objectValueFor tableColumn: NSTableColumn?, row: Int) -> Any? {
-		return sortedAccounts[row]
+		account(at: row)
 	}
 }
 
@@ -114,7 +132,9 @@ extension AccountsPreferencesViewController: NSTableViewDelegate {
 	func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
 		if let cell = tableView.makeView(withIdentifier: NSUserInterfaceItemIdentifier(rawValue: "Cell"), owner: nil) as? AccountCell {
 
-			let account = sortedAccounts[row]
+			guard let account = account(at: row) else {
+				return nil
+			}
 			cell.textField?.stringValue = account.nameForDisplay
 			cell.imageView?.image = account.smallIcon?.image
 
@@ -128,26 +148,14 @@ extension AccountsPreferencesViewController: NSTableViewDelegate {
 	}
 
 	func tableViewSelectionDidChange(_ notification: Notification) {
+		updateDeleteButtonState()
 
-		let selectedRow = tableView.selectedRow
-		if tableView.selectedRow == -1 {
-			deleteButton.isEnabled = false
-			hideController()
+		// A reload can report its selection more than once, so reloadTable(selecting:) updates the detail view when it settles.
+		if isReloadingTable {
 			return
-		} else {
-			deleteButton.isEnabled = true
 		}
-
-		let account = sortedAccounts[selectedRow]
-		if AccountManager.shared.defaultAccount == account {
-			deleteButton.isEnabled = false
-		}
-
-		let controller = AccountsDetailViewController(account: account)
-		showController(controller)
-
+		updateDetailView()
 	}
-
 }
 
 extension AccountsPreferencesViewController: AccountsPreferencesAddAccountDelegate {
@@ -167,10 +175,8 @@ extension AccountsPreferencesViewController: AccountsPreferencesAddAccountDelega
 			let accountsAddCloudKitWindowController = AccountsAddCloudKitWindowController()
 			addAccountWindowController = accountsAddCloudKitWindowController
 			Task { @MainActor in
-				if let response = await accountsAddCloudKitWindowController.runSheetOnWindow(window),
-				   response == .OK {
-					tableView.reloadData()
-				}
+				// No reload needed on OK — createAccount posts UserDidAddAccount, which reloads the table.
+				_ = await accountsAddCloudKitWindowController.runSheetOnWindow(window)
 			}
 
 		case .feedbin:
@@ -207,7 +213,7 @@ extension AccountsPreferencesViewController: AccountsPreferencesAddAccountDelega
 		alert.informativeText = NSLocalizedString("A web browser will open the Feedly login for you to authorize access.",
 												  comment: "Alert informative text when adding a Feedly account and waiting for authorization from the user.")
 
-		alert.addButton(withTitle: NSLocalizedString("Cancel", comment: "Cancel"))
+		alert.addButton(withTitle: NSLocalizedString("Cancel", comment: "Cancel button"))
 
 		let attachedWindow = self.view.window!
 
@@ -230,8 +236,57 @@ extension AccountsPreferencesViewController: AccountsPreferencesAddAccountDelega
 
 private extension AccountsPreferencesViewController {
 
+	func account(at row: Int) -> Account? {
+		sortedAccounts[safe: row]
+	}
+
 	func updateSortedAccounts() {
 		sortedAccounts = AccountManager.shared.sortedAccounts
+	}
+
+	func reloadTablePreservingSelection() {
+		reloadTable(selecting: selectedAccount)
+	}
+
+	func reloadTable(selecting accountToSelect: Account?) {
+		updateSortedAccounts()
+
+		isReloadingTable = true
+		tableView.reloadData()
+		if let accountToSelect, let row = sortedAccounts.firstIndex(of: accountToSelect) {
+			tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+		}
+		isReloadingTable = false
+
+		updateDeleteButtonState()
+		updateDetailView()
+	}
+
+	/// Reuses the existing detail view controller when it's already showing the selected account, so an in-progress edit isn't destroyed.
+	func updateDetailView() {
+		guard let selectedAccount else {
+			hideController()
+			return
+		}
+
+		let accountShowingInDetailView = (children.first as? AccountsDetailViewController)?.account
+		if accountShowingInDetailView == selectedAccount {
+			return
+		}
+
+		showController(AccountsDetailViewController(account: selectedAccount))
+	}
+
+	func updateDeleteButtonState() {
+		guard let selectedAccount else {
+			deleteButton.isEnabled = false
+			return
+		}
+		if selectedAccount == AccountManager.shared.defaultAccount {
+			deleteButton.isEnabled = false
+			return
+		}
+		deleteButton.isEnabled = !selectedAccount.refreshInProgress
 	}
 
 	func showController(_ controller: NSViewController) {
@@ -282,13 +337,7 @@ extension AccountsPreferencesViewController: OAuthAccountAuthorizationOperationD
 		// because the user probably wants to see the result of authorizing NetNewsWire to act on their behalf.
 		NSApp.activate(ignoringOtherApps: true)
 
-		Task { @MainActor in
-			do {
-				try await account.refreshAll()
-			} catch {
-				presentError(error)
-			}
-		}
+		account.triggerRefreshAll()
 	}
 
 	func oauthAccountAuthorizationOperation(_ operation: OAuthAccountAuthorizationOperation, didFailWith error: Error) {

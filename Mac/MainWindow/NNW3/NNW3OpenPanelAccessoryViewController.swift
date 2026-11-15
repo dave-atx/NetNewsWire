@@ -14,7 +14,11 @@ final class NNW3OpenPanelAccessoryViewController: NSViewController {
 	@IBOutlet var accountPopUpButton: NSPopUpButton!
 
 	var selectedAccount: Account? {
-		accountPopUpButton.selectedItem?.representedObject as? Account
+		guard let item: NSMenuItem = accountPopUpButton.selectedItem else {
+			return nil
+		}
+		let account: Account? = item.representedObject as? Account
+		return account
 	}
 
 	init() {
@@ -39,7 +43,7 @@ final class NNW3OpenPanelAccessoryViewController: NSViewController {
 			menuItem.representedObject = account
 			menu.addItem(menuItem)
 
-			if account.accountID == AppDefaults.shared.importOPMLAccountID {
+			if account.accountID == AppDefaults.importOPMLAccountID {
 				accountPopUpButton.select(menuItem)
 			}
 		}

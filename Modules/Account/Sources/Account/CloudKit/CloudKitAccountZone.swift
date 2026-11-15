@@ -7,7 +7,7 @@
 //
 
 import Foundation
-import os.log
+import os
 import RSCore
 import RSWeb
 import RSParser
@@ -27,6 +27,7 @@ enum CloudKitAccountZoneError: LocalizedError {
     weak var container: CKContainer?
     weak var database: CKDatabase?
 	var delegate: CloudKitZoneDelegate?
+	var fetchChangesPageHandler: CloudKitZoneFetchPageHandler?
 
 	struct CloudKitFeed {
 		static let recordType = "AccountWebFeed"
@@ -48,17 +49,16 @@ enum CloudKitAccountZoneError: LocalizedError {
 	}
 
 	init(container: CKContainer) {
-        self.container = container
-        self.database = container.privateCloudDatabase
+		self.container = container
+		self.database = container.privateCloudDatabase
 		self.zoneID = CKRecordZone.ID(zoneName: "Account", ownerName: CKCurrentUserDefaultName)
-		migrateChangeToken()
-    }
+	}
 
-	func importOPML(rootExternalID: String, items: [RSOPMLItem]) async throws {
+	func importOPML(rootExternalID: String, items: [OPMLItem]) async throws {
 		var records = [CKRecord]()
 		var feedRecords = [String: CKRecord]()
 
-		func processFeed(feedSpecifier: RSOPMLFeedSpecifier, containerExternalID: String) {
+		func processFeed(feedSpecifier: OPMLFeedSpecifier, containerExternalID: String) {
 			if let feedRecord = feedRecords[feedSpecifier.feedURL], var containerExternalIDs = feedRecord[CloudKitFeed.Fields.containerExternalIDs] as? [String] {
 				containerExternalIDs.append(containerExternalID)
 				feedRecord[CloudKitFeed.Fields.containerExternalIDs] = containerExternalIDs
@@ -202,9 +202,15 @@ enum CloudKitAccountZoneError: LocalizedError {
 		let predicate = NSPredicate(format: "isAccount = \"1\"")
 		let ckQuery = CKQuery(recordType: CloudKitContainer.recordType, predicate: predicate)
 
-		database?.fetch(withQuery: ckQuery, inZoneWith: zoneID, desiredKeys: nil, resultsLimit: CKQueryOperation.maximumResults) { [weak self] result in
+		guard let database else {
+			completion(.failure(CloudKitZoneError.unknown))
+			return
+		}
+
+		database.fetch(withQuery: ckQuery, inZoneWith: zoneID, desiredKeys: nil, resultsLimit: CKQueryOperation.maximumResults) { [weak self] result in
 			Task { @MainActor [weak self] in
 				guard let self else {
+					completion(.failure(CloudKitZoneError.unknown))
 					return
 				}
 
@@ -287,7 +293,7 @@ enum CloudKitAccountZoneError: LocalizedError {
 }
 
 private extension CloudKitAccountZone {
-	func newFeedCKRecord(feedSpecifier: RSOPMLFeedSpecifier, containerExternalID: String) -> CKRecord {
+	func newFeedCKRecord(feedSpecifier: OPMLFeedSpecifier, containerExternalID: String) -> CKRecord {
 		let record = CKRecord(recordType: CloudKitFeed.recordType, recordID: generateRecordID())
 		record[CloudKitFeed.Fields.url] = feedSpecifier.feedURL
 		if let editedName = feedSpecifier.title {

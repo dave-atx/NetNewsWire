@@ -9,9 +9,16 @@
 import AppKit
 import RSCore
 
+/// Measures row heights for rows about to be shown, so they draw at their measured heights.
+@MainActor protocol TimelineTableViewRowHeightDelegate: AnyObject {
+	func timelineTableViewDidLayout(_ tableView: TimelineTableView)
+	func timelineTableViewDidEndLiveResize(_ tableView: TimelineTableView)
+}
+
 final class TimelineTableView: NSTableView {
 
 	weak var keyboardDelegate: KeyboardDelegate?
+	weak var rowHeightDelegate: TimelineTableViewRowHeightDelegate?
 
 	override func accessibilityLabel() -> String? {
 		return NSLocalizedString("Timeline", comment: "Timeline")
@@ -32,17 +39,13 @@ final class TimelineTableView: NSTableView {
 		return true
 	}
 
-	override func viewWillStartLiveResize() {
-		if let scrollView = self.enclosingScrollView {
-			scrollView.hasVerticalScroller = false
-		}
-		super.viewWillStartLiveResize()
+	override func layout() {
+		super.layout()
+		rowHeightDelegate?.timelineTableViewDidLayout(self)
 	}
 
 	override func viewDidEndLiveResize() {
-		if let scrollView = self.enclosingScrollView {
-			scrollView.hasVerticalScroller = true
-		}
 		super.viewDidEndLiveResize()
+		rowHeightDelegate?.timelineTableViewDidEndLiveResize(self)
 	}
 }

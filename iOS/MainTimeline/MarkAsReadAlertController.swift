@@ -28,7 +28,7 @@ extension UIBarButtonItem: MarkAsReadAlertControllerSourceType {}
 			return
 		}
 
-		if AppDefaults.shared.confirmMarkAllAsRead {
+		if AppDefaults.confirmMarkAllAsRead {
 			let alertController = MarkAsReadAlertController.alert(coordinator: coordinator, confirmTitle: confirmTitle, cancelCompletion: cancelCompletion, sourceType: sourceType) { _ in
 				completion()
 			}
@@ -47,8 +47,8 @@ extension UIBarButtonItem: MarkAsReadAlertControllerSourceType {}
 		let title = NSLocalizedString("Mark As Read", comment: "Mark As Read")
 		let message = NSLocalizedString("You can turn this confirmation off in Settings.",
 										comment: "You can turn this confirmation off in Settings.")
-		let cancelTitle = NSLocalizedString("Cancel", comment: "Cancel")
-		let settingsTitle = NSLocalizedString("Open Settings", comment: "Open Settings")
+		let cancelTitle = NSLocalizedString("Cancel", comment: "Cancel button")
+		let settingsTitle = NSLocalizedString("Open Settings", comment: "Open Settings button")
 
 		let alertController = UIAlertController(title: title, message: message, preferredStyle: .actionSheet)
 		let cancelAction = UIAlertAction(title: cancelTitle, style: .cancel) { _ in
@@ -56,7 +56,7 @@ extension UIBarButtonItem: MarkAsReadAlertControllerSourceType {}
 		}
 		let settingsAction = UIAlertAction(title: settingsTitle, style: .default) { _ in
 			Task { @MainActor in
-				coordinator.showSettings(scrollToArticlesSection: true)
+				coordinator.showSettings(showTimelineSettings: true)
 			}
 		}
 		let markAction = UIAlertAction(title: confirmTitle, style: .default, handler: completion)

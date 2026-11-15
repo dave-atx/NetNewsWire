@@ -12,8 +12,6 @@ import Foundation
 
 struct DatabaseTableName {
 	static let articles = "articles"
-	static let authors = "authors"
-	static let authorsLookup = "authorsLookup"
 	static let statuses = "statuses"
 }
 
@@ -32,19 +30,17 @@ struct DatabaseKey {
 	static let externalURL = "externalURL"
 	static let summary = "summary"
 	static let imageURL = "imageURL"
-	static let bannerImageURL = "bannerImageURL"
+	static let thumbnailURL = "thumbnailURL"
 	static let datePublished = "datePublished"
 	static let dateModified = "dateModified"
 	static let authors = "authors"
+	static let attachments = "attachments"
 	static let searchRowID = "searchRowID"
 
 	// ArticleStatus
 	static let read = "read"
 	static let starred = "starred"
 	static let dateArrived = "dateArrived"
-
-	// Tag
-	static let tagName = "tagName"
 
 	// Author
 	static let authorID = "authorID"
@@ -55,8 +51,4 @@ struct DatabaseKey {
 	// Search
 	static let body = "body"
 	static let rowID = "rowid"
-}
-
-struct RelationshipName {
-	static let authors = "authors"
 }

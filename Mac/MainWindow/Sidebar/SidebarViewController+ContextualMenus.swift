@@ -41,6 +41,27 @@ extension SidebarViewController {
 			return nil
 		}
 	}
+
+	/// The status bar gear menu: New Feed and New Folder, then the contextual menu for the selection —
+	/// under a disabled item naming the selection, with its commands indented.
+	func statusBarMenu() -> NSMenu {
+		let statusBarMenu = menuForNoSelection()
+		let objects = selectedObjects
+		guard !objects.isEmpty, let selectionMenu = menu(for: objects), selectionMenu.numberOfItems > 0 else {
+			return statusBarMenu
+		}
+		statusBarMenu.addItem(NSMenuItem.separator())
+
+		let headerItem = NSMenuItem(title: statusBarMenuHeaderTitle(for: objects), action: nil, keyEquivalent: "")
+		headerItem.isEnabled = false
+		statusBarMenu.addItem(headerItem)
+
+		for item in selectionMenu.items {
+			item.indentationLevel = Self.statusBarMenuIndentationLevel
+		}
+		statusBarMenu.takeItems(from: selectionMenu)
+		return statusBarMenu
+	}
 }
 
 // MARK: Contextual Menu Actions
@@ -81,14 +102,7 @@ extension SidebarViewController {
 			return
 		}
 
-		let nodes = objects.compactMap { treeController.nodeInTreeRepresentingObject($0) }
-
-		let alert = SidebarDeleteItemsAlert.build(nodes)
-		alert.beginSheetModal(for: view.window!) { [weak self] result in
-			if result == NSApplication.ModalResponse.alertFirstButtonReturn {
-				self?.deleteNodes(nodes)
-			}
-		}
+		confirmAndDeleteNodes(clickedOrSelectedNodes(representing: objects))
 	}
 
 	@objc func renameFromContextualMenu(_ sender: Any?) {
@@ -114,16 +128,14 @@ extension SidebarViewController {
 				self.showNotificationsNotEnabledAlert()
 			} else if settings.authorizationStatus == .authorized {
 				DispatchQueue.main.async {
-					if feed.isNotifyAboutNewArticles == nil { feed.isNotifyAboutNewArticles = false }
-					feed.isNotifyAboutNewArticles?.toggle()
+					feed.newArticleNotificationsEnabled.toggle()
 					NotificationCenter.default.post(Notification(name: .DidUpdateFeedPreferencesFromContextMenu))
 				}
 			} else {
 				UNUserNotificationCenter.current().requestAuthorization(options: [.badge, .sound, .alert]) { granted, _ in
 					if granted {
 						DispatchQueue.main.async {
-							if feed.isNotifyAboutNewArticles == nil { feed.isNotifyAboutNewArticles = false }
-							feed.isNotifyAboutNewArticles?.toggle()
+							feed.newArticleNotificationsEnabled.toggle()
 							NotificationCenter.default.post(Notification(name: .DidUpdateFeedPreferencesFromContextMenu))
 							NSApplication.shared.registerForRemoteNotifications()
 						}
@@ -140,8 +152,7 @@ extension SidebarViewController {
 			  let feed = item.representedObject as? Feed else {
 			return
 		}
-		if feed.isArticleExtractorAlwaysOn == nil { feed.isArticleExtractorAlwaysOn = false }
-		feed.isArticleExtractorAlwaysOn?.toggle()
+		feed.readerViewAlwaysEnabled.toggle()
 		NotificationCenter.default.post(Notification(name: .DidUpdateFeedPreferencesFromContextMenu))
 	}
 
@@ -196,12 +207,31 @@ extension SidebarViewController: RenameWindowControllerDelegate {
 
 private extension SidebarViewController {
 
+	static let statusBarMenuIndentationLevel = 1
+
+	/// The name of the one selected item, or a description of a multiple selection.
+	func statusBarMenuHeaderTitle(for objects: [AnyObject]) -> String {
+		if objects.count == 1, let displayNameProvider = objects.first as? DisplayNameProvider {
+			return displayNameProvider.nameForDisplay
+		}
+		if objects.allSatisfy({ $0 is Feed }) {
+			return NSLocalizedString("Multiple feeds", comment: "Status bar gear menu: header for a selection of several feeds")
+		}
+		if objects.allSatisfy({ $0 is Folder }) {
+			return NSLocalizedString("Multiple folders", comment: "Status bar gear menu: header for a selection of several folders")
+		}
+		if objects.allSatisfy({ $0 is PseudoFeed }) {
+			return NSLocalizedString("Multiple smart feeds", comment: "Status bar gear menu: header for a selection of several smart feeds")
+		}
+		return NSLocalizedString("Multiple selection", comment: "Status bar gear menu: header for a selection of different kinds of items")
+	}
+
 	func menuForNoSelection() -> NSMenu {
 
 		let menu = NSMenu(title: "")
 
-		menu.addItem(withTitle: NSLocalizedString("New Feed", comment: "Command"), action: #selector(AppDelegate.showAddFeedWindow(_:)), keyEquivalent: "")
-		menu.addItem(withTitle: NSLocalizedString("New Folder", comment: "Command"), action: #selector(AppDelegate.showAddFolderWindow(_:)), keyEquivalent: "")
+		menu.addItem(withTitle: NSLocalizedString("New Feed…", comment: "Command"), action: #selector(AppDelegate.showAddFeedWindow(_:)), keyEquivalent: "")
+		menu.addItem(withTitle: NSLocalizedString("New Folder…", comment: "Command"), action: #selector(AppDelegate.showAddFolderWindow(_:)), keyEquivalent: "")
 
 		return menu
 	}
@@ -216,38 +246,30 @@ private extension SidebarViewController {
 		}
 
 		if let homePageURL = feed.homePageURL, URL(string: homePageURL) != nil {
-			let item = menuItem(NSLocalizedString("Open Home Page", comment: "Command"), #selector(openHomePageFromContextualMenu(_:)), homePageURL, image: Assets.Images.openInBrowser)
+			let item = menuItem(NSLocalizedString("Open Home Page", comment: "Command"), #selector(openHomePageFromContextualMenu(_:)), homePageURL)
 			menu.addItem(item)
 			menu.addItem(NSMenuItem.separator())
 		}
 
-		let copyFeedURLItem = menuItem(NSLocalizedString("Copy Feed URL", comment: "Command"), #selector(copyURLFromContextualMenu(_:)), feed.url, image: Assets.Images.copy)
+		let copyFeedURLItem = menuItem(NSLocalizedString("Copy Feed URL", comment: "Command"), #selector(copyURLFromContextualMenu(_:)), feed.url)
 		menu.addItem(copyFeedURLItem)
 
 		if let homePageURL = feed.homePageURL {
-			let item = menuItem(NSLocalizedString("Copy Home Page URL", comment: "Command"), #selector(copyURLFromContextualMenu(_:)), homePageURL, image: Assets.Images.copy)
+			let item = menuItem(NSLocalizedString("Copy Home Page URL", comment: "Command"), #selector(copyURLFromContextualMenu(_:)), homePageURL)
 			menu.addItem(item)
 		}
 		menu.addItem(NSMenuItem.separator())
 
 		let notificationText = feed.notificationDisplayName.capitalized
 
-		let notificationMenuItem = menuItem(notificationText, #selector(toggleNotificationsFromContextMenu(_:)), feed, image: Assets.Images.notification)
-		if feed.isNotifyAboutNewArticles == nil || feed.isNotifyAboutNewArticles! == false {
-			notificationMenuItem.state = .off
-		} else {
-			notificationMenuItem.state = .on
-		}
+		let notificationMenuItem = menuItem(notificationText, #selector(toggleNotificationsFromContextMenu(_:)), feed)
+		notificationMenuItem.state = feed.newArticleNotificationsEnabled ? .on : .off
 		menu.addItem(notificationMenuItem)
 
 		let articleExtractorText = NSLocalizedString("Always Use Reader View", comment: "Always Use Reader View")
-		let articleExtractorMenuItem = menuItem(articleExtractorText, #selector(toggleArticleExtractorFromContextMenu(_:)), feed, image: Assets.Images.articleExtractorOff)
+		let articleExtractorMenuItem = menuItem(articleExtractorText, #selector(toggleArticleExtractorFromContextMenu(_:)), feed)
 
-		if feed.isArticleExtractorAlwaysOn == nil || feed.isArticleExtractorAlwaysOn! == false {
-			articleExtractorMenuItem.state = .off
-		} else {
-			articleExtractorMenuItem.state = .on
-		}
+		articleExtractorMenuItem.state = feed.readerViewAlwaysEnabled ? .on : .off
 		menu.addItem(articleExtractorMenuItem)
 
 		menu.addItem(NSMenuItem.separator())
@@ -301,17 +323,17 @@ private extension SidebarViewController {
 
 	func markAllReadMenuItem(_ objects: [Any]) -> NSMenuItem {
 
-		return menuItem(NSLocalizedString("Mark All as Read", comment: "Command"), #selector(markObjectsReadFromContextualMenu(_:)), objects, image: Assets.Images.markAllAsReadMenu)
+		return menuItem(NSLocalizedString("Mark All as Read", comment: "Command"), #selector(markObjectsReadFromContextualMenu(_:)), objects)
 	}
 
 	func deleteMenuItem(_ objects: [Any]) -> NSMenuItem {
 
-		return menuItem(NSLocalizedString("Delete", comment: "Command"), #selector(deleteFromContextualMenu(_:)), objects, image: Assets.Images.delete)
+		return menuItem(NSLocalizedString("Delete", comment: "Delete button"), #selector(deleteFromContextualMenu(_:)), objects)
 	}
 
 	func renameMenuItem(_ object: Any) -> NSMenuItem {
 
-		return menuItem(NSLocalizedString("Rename", comment: "Command"), #selector(renameFromContextualMenu(_:)), object, image: Assets.Images.rename)
+		return menuItem(NSLocalizedString("Rename", comment: "Command"), #selector(renameFromContextualMenu(_:)), object)
 	}
 
 	func anyObjectInArrayHasNonZeroUnreadCount(_ objects: [Any]) -> Bool {
@@ -341,14 +363,11 @@ private extension SidebarViewController {
 		return object is Feed || object is Folder
 	}
 
-	func menuItem(_ title: String, _ action: Selector, _ representedObject: Any, image: RSImage?) -> NSMenuItem {
+	func menuItem(_ title: String, _ action: Selector, _ representedObject: Any) -> NSMenuItem {
 
 		let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
 		item.representedObject = representedObject
 		item.target = self
-		if let image {
-			item.image = image
-		}
 		return item
 	}
 
@@ -357,9 +376,8 @@ private extension SidebarViewController {
 		var articles = Set<Article>()
 		for object in objects {
 			if let articleFetcher = object as? ArticleFetcher {
-				if let unreadArticles = try? articleFetcher.fetchUnreadArticles() {
-					articles.formUnion(unreadArticles)
-				}
+				let unreadArticles = articleFetcher.fetchUnreadArticles()
+				articles.formUnion(unreadArticles)
 			}
 		}
 		return articles

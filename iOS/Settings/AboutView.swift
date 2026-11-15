@@ -7,6 +7,7 @@
 //
 
 import SwiftUI
+import RSCore
 
 struct AboutView: View {
     var body: some View {
@@ -15,13 +16,14 @@ struct AboutView: View {
 				Image("nnwFeedIcon")
 					.resizable()
 					.frame(width: 100, height: 100)
-					.clipShape(ConcentricRectangle(corners: .fixed(20)))
+					.clipShape(RoundedRectangle(cornerRadius: 20))
 
 				Text(verbatim: "NetNewsWire")
 					.font(.largeTitle)
 
-				Text(verbatim: "By Brent Simmons and the Ranchero Software team")
-					.foregroundStyle(.secondary)
+				CopyableText(text: "Version \(Bundle.main.versionNumber) (build \(Bundle.main.buildNumber))")
+
+				Text(verbatim: "By Brent Simmons and the NetNewsWire team")
 				Text("[netnewswire.com](https://netnewswire.com/)")
 
 				VStack(spacing: 6) {
@@ -31,7 +33,7 @@ struct AboutView: View {
 						.padding(.top, 16)
 					AboutCreditView(contributorType: "Contributing Developers", contributors: [.mauriceParker, .stuartBreckenridge])
 					AboutCreditView(contributorType: "App Icon", contributors: [.bradEllis])
-					AboutCreditView(contributorType: "Feedly Syncing", contributors: [.keilGillard])
+					AboutCreditView(contributorType: "Feedly Syncing", contributors: [.kielGillard])
 					AboutCreditView(contributorType: "NewsBlur Syncing", contributors: [.anhDo])
 					AboutCreditView(contributorType: "Under-the-hood magic & CSS", contributors: [.nateWeaver])
 					AboutCreditView(contributorType: "Newsfoot (JS footnote displayer)", contributors: [.andrewBrehaut])
@@ -64,7 +66,7 @@ struct AboutView: View {
 		}
 		.multilineTextAlignment(.center)
 		.background(Color(uiColor: .systemBackground))
-		.navigationTitle(Text(verbatim: "About"))
+		.navigationTitle(Text(verbatim: "About NetNewsWire"))
     }
 }
 

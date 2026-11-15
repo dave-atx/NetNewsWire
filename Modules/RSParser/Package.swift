@@ -3,43 +3,32 @@ import PackageDescription
 
 let package = Package(
 	name: "RSParser",
-	platforms: [.macOS(.v26), .iOS(.v26)],
+	platforms: [.macOS(.v15), .iOS(.v18)],
 	products: [
 		.library(
 			name: "RSParser",
 			type: .dynamic,
-			targets: ["RSParser"]),
-		.library(
-			name: "RSParserObjC",
-			type: .dynamic,
-			targets: ["RSParserObjC"])
+			targets: ["RSParser"])
 	],
 	dependencies: [
-		.package(path: "../RSMarkdown")
+		.package(url: "https://github.com/brentsimmons/Tidemark", from: "1.0.0"),
+		.package(path: "../RSCore")
 	],
 	targets: [
 		.target(
 			name: "RSParser",
-			dependencies: ["RSParserObjC", "RSMarkdown"],
-			path: "Sources/Swift",
+			dependencies: ["Tidemark", "RSCore"],
 			swiftSettings: [
+				.swiftLanguageMode(.v6),
 				.enableUpcomingFeature("NonisolatedNonsendingByDefault"),
 				.enableUpcomingFeature("InferIsolatedConformances")
 			]),
-		.target(
-			name: "RSParserObjC",
-			dependencies: [],
-			path: "Sources/ObjC",
-			cSettings: [
-				.headerSearchPath("include")
-			]
-		),
 		.testTarget(
 			name: "RSParserTests",
 			dependencies: ["RSParser"],
-			exclude: ["Info.plist"],
 			resources: [.copy("Resources")],
 			swiftSettings: [
+				.swiftLanguageMode(.v6),
 				.enableUpcomingFeature("NonisolatedNonsendingByDefault"),
 				.enableUpcomingFeature("InferIsolatedConformances")
 			]

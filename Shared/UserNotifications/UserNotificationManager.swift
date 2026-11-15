@@ -43,19 +43,13 @@ import UserNotifications
 		}
 
 		for article in articles {
-			if !article.status.read, let feed = article.feed, feed.isNotifyAboutNewArticles ?? false {
+			if !article.status.read, let feed = article.feed, feed.newArticleNotificationsEnabled {
 				sendNotification(feed: feed, article: article)
 			}
 		}
 	}
 
 	@objc func statusesDidChange(_ note: Notification) {
-		if let statuses = note.userInfo?[Account.UserInfoKey.statuses] as? Set<ArticleStatus>, !statuses.isEmpty {
-			let identifiers = statuses.filter({ $0.read }).map { "articleID:\($0.articleID)" }
-			UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: identifiers)
-			return
-		}
-
 		if let articleIDs = note.userInfo?[Account.UserInfoKey.articleIDs] as? Set<String>,
 		   let statusKey = note.userInfo?[Account.UserInfoKey.statusKey] as? ArticleStatus.Key,
 		   let flag = note.userInfo?[Account.UserInfoKey.statusFlag] as? Bool,
@@ -73,10 +67,10 @@ private extension UserNotificationManager {
 		let content = UNMutableNotificationContent()
 
 		content.title = feed.nameForDisplay
-		if !ArticleStringFormatter.truncatedTitle(article).isEmpty {
-			content.subtitle = ArticleStringFormatter.truncatedTitle(article)
+		if !ArticleStringFormatter.shared.truncatedTitle(article).isEmpty {
+			content.subtitle = ArticleStringFormatter.shared.truncatedTitle(article)
 		}
-		content.body = ArticleStringFormatter.truncatedSummary(article)
+		content.body = ArticleStringFormatter.shared.truncatedSummary(article)
 		content.threadIdentifier = feed.feedID
 		content.sound = UNNotificationSound.default
 		content.userInfo = [UserInfoKey.articlePath: article.pathUserInfo]
@@ -104,8 +98,8 @@ private extension UserNotificationManager {
 	}
 
 	func registerCategoriesAndActions() {
-		let readAction = UNNotificationAction(identifier: ActionIdentifier.markAsRead, title: NSLocalizedString("Mark as Read", comment: "Mark as Read"), options: [])
-		let starredAction = UNNotificationAction(identifier: ActionIdentifier.markAsStarred, title: NSLocalizedString("Mark as Starred", comment: "Mark as Starred"), options: [])
+		let readAction = UNNotificationAction(identifier: ActionIdentifier.markAsRead, title: NSLocalizedString("Mark as Read", comment: "Command"), options: [])
+		let starredAction = UNNotificationAction(identifier: ActionIdentifier.markAsStarred, title: NSLocalizedString("Mark as Starred", comment: "Command"), options: [])
 		let openAction = UNNotificationAction(identifier: ActionIdentifier.openArticle, title: NSLocalizedString("Open", comment: "Open"), options: [.foreground])
 
 		let newArticleCategory = UNNotificationCategory(identifier: Self.notificationCategory,

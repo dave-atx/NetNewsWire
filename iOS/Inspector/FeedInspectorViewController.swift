@@ -11,6 +11,7 @@ import SafariServices
 import UserNotifications
 import RSCore
 import Account
+import Images
 
 final class FeedInspectorViewController: UITableViewController {
 
@@ -19,10 +20,10 @@ final class FeedInspectorViewController: UITableViewController {
 	var feed: Feed!
 
 	@IBOutlet var nameTextField: UITextField!
-	@IBOutlet var notifyAboutNewArticlesSwitch: UISwitch!
-	@IBOutlet var alwaysShowReaderViewSwitch: UISwitch!
-	@IBOutlet var homePageLabel: InteractiveLabel!
-	@IBOutlet var feedURLLabel: InteractiveLabel!
+	@IBOutlet var newArticleNotificationsEnabledSwitch: UISwitch!
+	@IBOutlet var readerViewAlwaysEnabledSwitch: UISwitch!
+	@IBOutlet var homePageLabel: UILabel!
+	@IBOutlet var feedURLLabel: UILabel!
 
 	private var headerView: InspectorIconHeaderView?
 	private var iconImage: IconImage? {
@@ -30,6 +31,7 @@ final class FeedInspectorViewController: UITableViewController {
 	}
 
 	private let homePageIndexPath = IndexPath(row: 0, section: 1)
+	private let feedURLIndexPath = IndexPath(row: 0, section: 2)
 
 	private var shouldHideHomePageSection: Bool {
 		return feed.homePageURL == nil
@@ -43,14 +45,14 @@ final class FeedInspectorViewController: UITableViewController {
 		navigationItem.title = feed.nameForDisplay
 		nameTextField.text = feed.nameForDisplay
 
-		notifyAboutNewArticlesSwitch.setOn(feed.isNotifyAboutNewArticles ?? false, animated: false)
+		newArticleNotificationsEnabledSwitch.setOn(feed.newArticleNotificationsEnabled, animated: false)
 
-		alwaysShowReaderViewSwitch.setOn(feed.isArticleExtractorAlwaysOn ?? false, animated: false)
+		readerViewAlwaysEnabledSwitch.setOn(feed.readerViewAlwaysEnabled, animated: false)
 
 		homePageLabel.text = feed.homePageURL
 		feedURLLabel.text = feed.url
 
-		NotificationCenter.default.addObserver(self, selector: #selector(feedIconDidBecomeAvailable(_:)), name: .feedIconDidBecomeAvailable, object: nil)
+		NotificationCenter.default.addObserver(self, selector: #selector(handleFeedIconImageDidChange(_:)), name: .feedIconImageDidChange, object: nil)
 
 		NotificationCenter.default.addObserver(self, selector: #selector(updateNotificationSettings), name: UIApplication.willEnterForegroundNotification, object: nil)
 
@@ -69,37 +71,37 @@ final class FeedInspectorViewController: UITableViewController {
 	}
 
 	// MARK: Notifications
-	@objc func feedIconDidBecomeAvailable(_ notification: Notification) {
+	@objc func handleFeedIconImageDidChange(_ notification: Notification) {
 		headerView?.iconView.iconImage = iconImage
 	}
 
-	@IBAction func notifyAboutNewArticlesChanged(_ sender: Any) {
+	@IBAction func newArticleNotificationsEnabledChanged(_ sender: Any) {
 		guard let authorizationStatus else {
-			notifyAboutNewArticlesSwitch.isOn = !notifyAboutNewArticlesSwitch.isOn
+			newArticleNotificationsEnabledSwitch.isOn = !newArticleNotificationsEnabledSwitch.isOn
 			return
 		}
 		if authorizationStatus == .denied {
-			notifyAboutNewArticlesSwitch.isOn = !notifyAboutNewArticlesSwitch.isOn
+			newArticleNotificationsEnabledSwitch.isOn = !newArticleNotificationsEnabledSwitch.isOn
 			present(notificationUpdateErrorAlert(), animated: true, completion: nil)
 		} else if authorizationStatus == .authorized {
-			feed.isNotifyAboutNewArticles = notifyAboutNewArticlesSwitch.isOn
+			feed.newArticleNotificationsEnabled = newArticleNotificationsEnabledSwitch.isOn
 		} else {
 			UNUserNotificationCenter.current().requestAuthorization(options: [.badge, .sound, .alert]) { granted, _ in
 				Task { @MainActor in
 					self.updateNotificationSettings()
 					if granted {
-						self.feed.isNotifyAboutNewArticles = self.notifyAboutNewArticlesSwitch.isOn
+						self.feed.newArticleNotificationsEnabled = self.newArticleNotificationsEnabledSwitch.isOn
 						UIApplication.shared.registerForRemoteNotifications()
 					} else {
-						self.notifyAboutNewArticlesSwitch.isOn = !self.notifyAboutNewArticlesSwitch.isOn
+						self.newArticleNotificationsEnabledSwitch.isOn = !self.newArticleNotificationsEnabledSwitch.isOn
 					}
 				}
 			}
 		}
 	}
 
-	@IBAction func alwaysShowReaderViewChanged(_ sender: Any) {
-		feed.isArticleExtractorAlwaysOn = alwaysShowReaderViewSwitch.isOn
+	@IBAction func readerViewAlwaysEnabledChanged(_ sender: Any) {
+		feed.readerViewAlwaysEnabled = readerViewAlwaysEnabledSwitch.isOn
 	}
 
 	@IBAction func done(_ sender: Any) {
@@ -180,6 +182,30 @@ extension FeedInspectorViewController {
 		}
 	}
 
+	override func tableView(_ tableView: UITableView, contextMenuConfigurationForRowAt indexPath: IndexPath, point: CGPoint) -> UIContextMenuConfiguration? {
+		let logicalIndexPath = shift(indexPath)
+		let title: String
+		let urlString: String?
+		if logicalIndexPath == homePageIndexPath {
+			title = NSLocalizedString("Copy Home Page URL", comment: "Command")
+			urlString = feed.homePageURL
+		} else if logicalIndexPath == feedURLIndexPath {
+			title = NSLocalizedString("Copy Feed URL", comment: "Command")
+			urlString = feed.url
+		} else {
+			return nil
+		}
+		guard let urlString else {
+			return nil
+		}
+		return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { _ in
+			let copyAction = UIAction(title: title, image: Assets.Images.copy) { _ in
+				UIPasteboard.general.string = urlString
+			}
+			return UIMenu(title: "", children: [copyAction])
+		}
+	}
+
 }
 
 // MARK: UITextFieldDelegate
@@ -212,7 +238,7 @@ extension FeedInspectorViewController {
 	func notificationUpdateErrorAlert() -> UIAlertController {
 		let alert = UIAlertController(title: NSLocalizedString("Enable Notifications", comment: "Notifications"),
 									  message: NSLocalizedString("Notifications need to be enabled in the Settings app.", comment: "Notifications need to be enabled in the Settings app."), preferredStyle: .alert)
-		let openSettings = UIAlertAction(title: NSLocalizedString("Open Settings", comment: "Open Settings"), style: .default) { _ in
+		let openSettings = UIAlertAction(title: NSLocalizedString("Open Settings", comment: "Open Settings button"), style: .default) { _ in
 			UIApplication.shared.open(URL(string: UIApplication.openSettingsURLString)!, options: [UIApplication.OpenExternalURLOptionsKey.universalLinksOnly: false], completionHandler: nil)
 		}
 		let dismiss = UIAlertAction(title: NSLocalizedString("Dismiss", comment: "Dismiss"), style: .cancel, handler: nil)

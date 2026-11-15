@@ -97,24 +97,21 @@ final class AccountsReaderAPIWindowController: NSWindowController {
 		self.errorMessageLabel.stringValue = ""
 
 		guard !usernameTextField.stringValue.isEmpty && !passwordTextField.stringValue.isEmpty else {
-			self.errorMessageLabel.stringValue = NSLocalizedString("Username, password & API URL are required.", comment: "Credentials Error")
+			self.errorMessageLabel.stringValue = NSLocalizedString("Username, password, and API URL are required.", comment: "Credentials Error")
 			return
 		}
 
 		guard let accountType = accountType, !(accountType == .freshRSS && apiURLTextField.stringValue.isEmpty) else {
-			self.errorMessageLabel.stringValue = NSLocalizedString("Username, password & API URL are required.", comment: "Credentials Error")
+			self.errorMessageLabel.stringValue = NSLocalizedString("Username, password, and API URL are required.", comment: "Credentials Error")
 			return
 		}
 
-		guard account != nil || !AccountManager.shared.duplicateServiceAccount(type: accountType, username: usernameTextField.stringValue) else {
-			self.errorMessageLabel.stringValue = NSLocalizedString("There is already an account of this type with that username created.", comment: "Duplicate Error")
-			return
-		}
+		let trimmedUsername = usernameTextField.stringValue.trimmingWhitespace
 
 		let apiURL: URL
 		switch accountType {
 		case .freshRSS:
-			guard let inputURL = URL(string: apiURLTextField.stringValue) else {
+			guard let inputURL = URL(string: apiURLTextField.stringValue.trimmingWhitespace) else {
 				self.errorMessageLabel.stringValue = NSLocalizedString("Invalid API URL.", comment: "Invalid API URL")
 				return
 			}
@@ -130,6 +127,11 @@ final class AccountsReaderAPIWindowController: NSWindowController {
 			return
 		}
 
+		guard account != nil || !AccountManager.shared.duplicateServiceAccount(type: accountType, username: trimmedUsername, endpoint: apiURL) else {
+			self.errorMessageLabel.stringValue = NSLocalizedString("There is already an account of this type with that username created.", comment: "Duplicate Error")
+			return
+		}
+
 		Task { @MainActor in
 			actionButton.isEnabled = false
 			progressIndicator.isHidden = false
@@ -141,7 +143,7 @@ final class AccountsReaderAPIWindowController: NSWindowController {
 				progressIndicator.stopAnimation(self)
 			}
 
-			let credentials = Credentials(type: .readerBasic, username: usernameTextField.stringValue, secret: passwordTextField.stringValue)
+			let credentials = Credentials(type: .readerBasic, username: trimmedUsername, secret: passwordTextField.stringValue)
 			do {
 				let validatedCredentials = try await Account.validateCredentials(type: accountType, credentials: credentials, endpoint: apiURL)
 				stopAnimation()
@@ -158,25 +160,19 @@ final class AccountsReaderAPIWindowController: NSWindowController {
 				do {
 					account?.endpointURL = apiURL
 
-					try account?.removeCredentials(type: .readerBasic)
-					try account?.removeCredentials(type: .readerAPIKey)
 					try account?.storeCredentials(credentials)
 					try account?.storeCredentials(validatedCredentials)
 
-					do {
-						try await account?.refreshAll()
-					} catch {
-						NSApplication.shared.presentError(error)
-					}
-
 					hostWindow?.endSheet(window!, returnCode: NSApplication.ModalResponse.OK)
+
+					account?.triggerRefreshAll()
 				} catch {
 					errorMessageLabel.stringValue = NSLocalizedString("Keychain error while storing credentials.", comment: "Credentials Error")
 				}
 
 			} catch {
 				stopAnimation()
-				errorMessageLabel.stringValue = NSLocalizedString("Network error. Try again later.", comment: "Credentials Error")
+				errorMessageLabel.stringValue = error.localizedDescription
 			}
 		}
 	}

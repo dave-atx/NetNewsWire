@@ -7,14 +7,15 @@
 //
 
 import Foundation
+import RSCore
+import os
 import Synchronization
-import os.log
 import Account
 
 final class ExtensionFeedAddRequestFile: NSObject, NSFilePresenter, Sendable {
 	static let shared = ExtensionFeedAddRequestFile()
 
-	static private let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "ExtensionFeedAddRequestFile")
+	static private let logger = Logger(subsystem: Logger.nnwSubsystem, category: "ExtensionFeedAddRequestFile")
 
 	private static let filePath: String = {
 		let appGroup = Bundle.main.object(forInfoDictionaryKey: "AppGroup") as! String
@@ -39,18 +40,16 @@ final class ExtensionFeedAddRequestFile: NSObject, NSFilePresenter, Sendable {
 	private let didStart = Mutex(false)
 
 	func start() {
-		var shouldBail = false
-		didStart.withLock { didStart in
+		let alreadyStarted = didStart.withLock { didStart -> Bool in
 			if didStart {
-				shouldBail = true
-				assertionFailure("start called when already did start")
-				return
+				return true
 			}
-
 			didStart = true
+			return false
 		}
 
-		if shouldBail {
+		if alreadyStarted {
+			assertionFailure("start called when already did start")
 			return
 		}
 

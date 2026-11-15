@@ -5,10 +5,11 @@
 //  Created by Maurice Parker on 3/26/20.
 //  Copyright © 2020 Ranchero Software, LLC. All rights reserved.
 //
-// Derived from https://github.com/caiyue1993/IceCream
 
 import Foundation
 import CloudKit
+
+// Error strings derived from <https://github.com/caiyue1993/IceCream>.
 
 public final class CloudKitError: LocalizedError, Sendable {
 
@@ -24,6 +25,8 @@ public final class CloudKitError: LocalizedError, Sendable {
 		}
 
 		switch ckError.code {
+		case .accountTemporarilyUnavailable:
+			return NSLocalizedString("Account Temporarily Unavailable: iCloud sync is paused. You may need to accept new iCloud Terms and Conditions, or check your iCloud account in Settings.", comment: "Known iCloud Error")
 		case .alreadyShared:
 			return NSLocalizedString("Already Shared: a record or share cannot be saved because doing so would cause the same hierarchy of records to exist in multiple shares.", comment: "Known iCloud Error")
 		case .assetFileModified:
@@ -83,7 +86,7 @@ public final class CloudKitError: LocalizedError, Sendable {
 		case .tooManyParticipants:
 			return NSLocalizedString("Too Many Participants: a share cannot be saved because too many participants are attached to the share.", comment: "Known iCloud Error")
 		case .unknownItem:
-			return NSLocalizedString("Unknown Item:  the specified record does not exist.", comment: "Known iCloud Error")
+			return NSLocalizedString("Unknown Item: the specified record does not exist.", comment: "Known iCloud Error")
 		case .userDeletedZone:
 			return NSLocalizedString("User Deleted Zone: the user has deleted this zone from the settings UI.", comment: "Known iCloud Error")
 		case .zoneBusy:
@@ -91,7 +94,12 @@ public final class CloudKitError: LocalizedError, Sendable {
 		case .zoneNotFound:
 			return NSLocalizedString("Zone Not Found: the specified record zone does not exist on the server.", comment: "Known iCloud Error")
 		default:
-			return NSLocalizedString("Unhandled Error.", comment: "Unknown iCloud Error")
+			// A code we don't map — the system string beats a generic fallback.
+			let description = ckError.localizedDescription
+			if let failureReason = (ckError as NSError).localizedFailureReason {
+				return "\(description): \(failureReason)"
+			}
+			return description
 		}
 	}
 

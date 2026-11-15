@@ -10,32 +10,29 @@ import Foundation
 import RSCore
 import Articles
 import Account
+import Images
 
 // These handle multiple accounts.
 
 @MainActor func markArticles(_ articles: Set<Article>, statusKey: ArticleStatus.Key, flag: Bool, completion: (() -> Void)? = nil) {
-	let d: [String: Set<Article>] = accountAndArticlesDictionary(articles)
+	markArticleIDs(articleIDsByAccountID(articles), statusKey: statusKey, flag: flag, completion: completion)
+}
 
-	let group = DispatchGroup()
-
-	for (accountID, accountArticles) in d {
-		guard let account = AccountManager.shared.existingAccount(accountID: accountID) else {
-			continue
+@MainActor func markArticleIDs(_ articleIDsByAccountID: [String: Set<String>], statusKey: ArticleStatus.Key, flag: Bool, completion: (() -> Void)? = nil) {
+	Task { @MainActor in
+		for (accountID, articleIDs) in articleIDsByAccountID {
+			guard let account = AccountManager.shared.existingAccount(accountID: accountID) else {
+				continue
+			}
+			try? await account.markArticles(articleIDs: articleIDs, statusKey: statusKey, flag: flag)
 		}
-		group.enter()
-		account.markArticles(accountArticles, statusKey: statusKey, flag: flag) { _ in
-			group.leave()
-		}
-	}
-
-	group.notify(queue: .main) {
 		completion?()
 	}
 }
 
-private func accountAndArticlesDictionary(_ articles: Set<Article>) -> [String: Set<Article>] {
+private func articleIDsByAccountID(_ articles: Set<Article>) -> [String: Set<String>] {
 	let d = Dictionary(grouping: articles, by: { $0.accountID })
-	return d.mapValues { Set($0) }
+	return d.mapValues { Set($0.articleIDs()) }
 }
 
 extension Article {
@@ -55,6 +52,10 @@ extension Article {
 		return URL.encodeSpacesIfNeeded(rawImageLink)
 	}
 
+	var thumbnailURL: URL? {
+		URL.encodeSpacesIfNeeded(rawThumbnailLink)
+	}
+
 	var link: String? {
 		// Prefer link from URL, if one can be created, as these are repaired if required.
 		// Provide the raw link if URL creation fails.
@@ -71,6 +72,10 @@ extension Article {
 		// Prefer link from imageURL, if one can be created, as these are repaired if required.
 		// Provide the raw link if URL creation fails.
 		return imageURL?.absoluteString ?? rawImageLink
+	}
+
+	var thumbnailLink: String? {
+		thumbnailURL?.absoluteString ?? rawThumbnailLink
 	}
 
 	var preferredLink: String? {
@@ -102,13 +107,43 @@ extension Article {
 		return IconImageCache.shared.imageForArticle(self)
 	}
 
+	/// Grayscale when the current theme’s Info.plist sets `grayscaleIcon`.
+	func articleViewIconImage() -> IconImage? {
+		guard let iconImage = iconImage() else {
+			return nil
+		}
+		return ArticleThemesManager.shared.currentTheme.usesGrayscaleIcon ? iconImage.grayscaleIconImage : iconImage
+	}
+
+	/// True when an icon notification is about an icon this article might show:
+	/// its feed’s icon, or one of its authors’ avatars.
+	func mightShowIcon(in notification: Notification) -> Bool {
+		switch notification.name {
+		case .feedIconImageDidChange:
+			guard let feed, let notificationFeed = notification.userInfo?[UserInfoKey.feed] as? Feed else {
+				return false
+			}
+			return notificationFeed == feed
+		case .authorAvatarImageDidChange:
+			guard let avatarURL = notification.userInfo?[UserInfoKey.url] as? String else {
+				return false
+			}
+			return authors?.contains { $0.avatarURL == avatarURL } ?? false
+		default:
+			return false
+		}
+	}
+
 	func iconImageUrl(feed: Feed) -> URL? {
 		if let image = iconImage() {
+			guard let imageData = image.image.dataRepresentation() else {
+				return nil
+			}
 			let fm = FileManager.default
 			var path = fm.urls(for: .cachesDirectory, in: .userDomainMask)[0]
 			let feedID = feed.feedID.replacingOccurrences(of: "/", with: "_")
 			path.appendPathComponent(feedID + "_smallIcon.png")
-			fm.createFile(atPath: path.path, contents: image.image.dataRepresentation()!, attributes: nil)
+			fm.createFile(atPath: path.path, contents: imageData, attributes: nil)
 			return path
 		} else {
 			return nil
@@ -197,25 +232,5 @@ struct ArticlePathKey {
 			ArticlePathKey.feedID: feedID,
 			ArticlePathKey.articleID: articleID
 		]
-	}
-}
-
-// MARK: SortableArticle
-
-@MainActor extension Article: SortableArticle {
-	var sortableName: String {
-		return feed?.name ?? ""
-	}
-
-	var sortableDate: Date {
-		return logicalDatePublished
-	}
-
-	var sortableArticleID: String {
-		return articleID
-	}
-
-	var sortableFeedID: String {
-		return feedID
 	}
 }

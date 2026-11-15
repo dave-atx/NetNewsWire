@@ -8,6 +8,7 @@
 
 import AppKit
 import Account
+import ActivityLog
 import UniformTypeIdentifiers
 
 final class ExportOPMLWindowController: NSWindowController {
@@ -25,17 +26,22 @@ final class ExportOPMLWindowController: NSWindowController {
 		let menu = NSMenu()
 		accountPopUpButton.menu = menu
 
-		for oneAccount in AccountManager.shared.sortedAccounts {
+		let accounts: [Account] = AccountManager.shared.sortedAccounts
+		let savedAccountID: String? = AppDefaults.exportOPMLAccountID
 
-			let oneMenuItem = NSMenuItem()
-			oneMenuItem.title = oneAccount.nameForDisplay
-			oneMenuItem.representedObject = oneAccount
-			menu.addItem(oneMenuItem)
+		for oneAccount in accounts {
+			addMenuItem(to: menu, for: oneAccount, savedAccountID: savedAccountID)
+		}
+	}
 
-			if oneAccount.accountID == AppDefaults.shared.exportOPMLAccountID {
-				accountPopUpButton.select(oneMenuItem)
-			}
+	private func addMenuItem(to menu: NSMenu, for account: Account, savedAccountID: String?) {
+		let menuItem = NSMenuItem()
+		menuItem.title = account.nameForDisplay
+		menuItem.representedObject = account
+		menu.addItem(menuItem)
 
+		if account.accountID == savedAccountID {
+			accountPopUpButton.select(menuItem)
 		}
 	}
 
@@ -69,7 +75,7 @@ final class ExportOPMLWindowController: NSWindowController {
 		}
 
 		let account = menuItem.representedObject as! Account
-		AppDefaults.shared.exportOPMLAccountID = account.accountID
+		AppDefaults.exportOPMLAccountID = account.accountID
 		hostWindow!.endSheet(window!, returnCode: NSApplication.ModalResponse.OK)
 		exportOPML(account: account)
 
@@ -93,9 +99,11 @@ final class ExportOPMLWindowController: NSWindowController {
 			if result == NSApplication.ModalResponse.OK, let url = panel.url {
 				DispatchQueue.main.async {
 					let filename = url.lastPathComponent
-					let opmlString = OPMLExporter.OPMLString(with: account, title: filename)
 					do {
-						try opmlString.write(to: url, atomically: true, encoding: String.Encoding.utf8)
+						try account.logActivity(kind: .exportOPML, detail: filename) {
+							let opmlString = OPMLExporter.OPMLString(with: account, title: filename)
+							try opmlString.write(to: url, atomically: true, encoding: String.Encoding.utf8)
+						}
 					} catch let error as NSError {
 						NSApplication.shared.presentError(error)
 					}

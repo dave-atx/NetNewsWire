@@ -16,7 +16,7 @@ struct AddAccountHelpView: View {
 	var helpText: String
 
 	var hasiCloudAccount: Bool {
-		AccountManager.shared.accounts.contains(where: { $0.type == .cloudKit })
+		AccountManager.shared.hasiCloudAccount
 	}
 
 	var body: some View {
@@ -25,7 +25,7 @@ struct AddAccountHelpView: View {
 				ForEach(accountTypes, id: \.self) { accountType in
 					if accountType == .cloudKit && hasiCloudAccount {
 						EmptyView()
-					} else if !(AppDefaults.shared.isDeveloperBuild && accountType.isDeveloperRestricted) {
+					} else if !(AppDefaults.isDeveloperBuild && accountType.isDeveloperRestricted) {
 						Button(action: {
 							delegate?.presentSheetForAccount(accountType)
 						}, label: {

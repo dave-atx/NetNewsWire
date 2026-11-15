@@ -10,7 +10,7 @@ import AppKit
 
 final class DetailContainerView: NSView, @MainActor NSTextFinderBarContainer {
 
-	@IBOutlet var detailStatusBarView: DetailStatusBarView!
+	@IBOutlet var linkOverlayView: DetailLinkOverlayView!
 
 	var contentViewConstraints: [NSLayoutConstraint]?
 
@@ -28,17 +28,36 @@ final class DetailContainerView: NSView, @MainActor NSTextFinderBarContainer {
 
 			if let contentView = contentView {
 				contentView.translatesAutoresizingMaskIntoConstraints = false
-				addSubview(contentView, positioned: .below, relativeTo: detailStatusBarView)
-
-				// Constrain the content view to fill the available space on all sides except the top, which we'll constrain to the find bar
-				var constraints = constraintsToMakeSubViewFullSize(contentView).filter { $0.firstAttribute != .top }
-
-				constraints.append(findBarContainerView.topAnchor.constraint(equalTo: self.safeAreaLayoutGuide.topAnchor))
-				constraints.append(findBarContainerView.bottomAnchor.constraint(equalTo: contentView.topAnchor))
+				addSubview(contentView, positioned: .below, relativeTo: linkOverlayView)
+				// Leading and trailing follow the safe area so the article view doesn’t extend under the sidebar
+				// in column layout on macOS 26. Top stays at the edge: the web view handles the toolbar itself.
+				let constraints = [
+					contentViewTopConstraint(contentView),
+					contentView.bottomAnchor.constraint(equalTo: bottomAnchor),
+					contentView.leadingAnchor.constraint(equalTo: safeAreaLayoutGuide.leadingAnchor),
+					contentView.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor)
+				]
 				NSLayoutConstraint.activate(constraints)
 				contentViewConstraints = constraints
 			}
 		}
+	}
+
+	private func contentViewTopConstraint(_ contentView: NSView) -> NSLayoutConstraint {
+		if isFindBarVisible {
+			return contentView.topAnchor.constraint(equalTo: findBarContainerView.bottomAnchor)
+		}
+		return contentView.topAnchor.constraint(equalTo: topAnchor)
+	}
+
+	private func updateContentViewTopConstraint() {
+		guard let contentView, var constraints = contentViewConstraints, let index = constraints.firstIndex(where: { $0.firstAttribute == .top }) else {
+			return
+		}
+		constraints[index].isActive = false
+		constraints[index] = contentViewTopConstraint(contentView)
+		constraints[index].isActive = true
+		contentViewConstraints = constraints
 	}
 
 	override func draw(_ dirtyRect: NSRect) {
@@ -82,10 +101,8 @@ final class DetailContainerView: NSView, @MainActor NSTextFinderBarContainer {
 				}
 			}
 
-			// Notify the web view so it can update its obscuredContentInsets
-			if let webView = contentView as? DetailWebView {
-				webView.isFindBarVisible = isFindBarVisible
-			}
+			// The web view sits below the find bar while it’s visible.
+			updateContentViewTopConstraint()
 		}
 	}
 

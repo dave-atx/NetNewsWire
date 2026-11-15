@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
 	name: "ArticlesDatabase",
-	platforms: [.macOS(.v26), .iOS(.v26)],
+	platforms: [.macOS(.v15), .iOS(.v18)],
 	products: [
 		.library(
 			name: "ArticlesDatabase",
@@ -24,6 +24,18 @@ let package = Package(
 				"RSDatabase",
 				"RSParser",
 				"Articles"
+			],
+			swiftSettings: [
+				.enableUpcomingFeature("NonisolatedNonsendingByDefault"),
+				.enableUpcomingFeature("InferIsolatedConformances")
+			]
+		),
+		.testTarget(
+			name: "ArticlesDatabaseTests",
+			dependencies: [
+				"ArticlesDatabase",
+				"Articles",
+				"RSParser"
 			],
 			swiftSettings: [
 				.enableUpcomingFeature("NonisolatedNonsendingByDefault"),

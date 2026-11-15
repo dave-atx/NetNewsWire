@@ -11,8 +11,19 @@ import Foundation
 private struct URLConstants {
 	static let schemeHTTP = "http"
 	static let schemeHTTPS = "https"
+	static let schemeMailto = "mailto"
 	static let prefixHTTP = "http://"
 	static let prefixHTTPS = "https://"
+	static let schemeNetNewsWire = "netnewswire"
+	static let schemeFeed = "feed"
+	static let schemeFeeds = "feeds"
+#if os(macOS)
+	static let schemeMagnet = "magnet"
+	static let schemeNetNewsWireFeed = "x-netnewswire-feed"
+	static let allowedSchemesForOpening: Set<String> = [schemeHTTP, schemeHTTPS, schemeMailto, schemeMagnet, schemeNetNewsWire, schemeFeed, schemeFeeds, schemeNetNewsWireFeed]
+#else
+	static let allowedSchemesForOpening: Set<String> = [schemeHTTP, schemeHTTPS, schemeMailto, schemeNetNewsWire, schemeFeed, schemeFeeds]
+#endif
 }
 
 public extension URL {
@@ -58,6 +69,11 @@ public extension URL {
 	}
 
 	func preparedForOpeningInBrowser() -> URL? {
+		guard let scheme = scheme?.lowercased(with: localeForLowercasing),
+			  URLConstants.allowedSchemesForOpening.contains(scheme) else {
+			return nil
+		}
+
 		var urlString = absoluteString.replacingOccurrences(of: " ", with: "%20")
 		urlString = urlString.replacingOccurrences(of: "^", with: "%5E")
 		urlString = urlString.replacingOccurrences(of: "&amp;", with: "&")

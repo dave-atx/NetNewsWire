@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
 	name: "Account",
-	platforms: [.macOS(.v26), .iOS(.v26)],
+	platforms: [.macOS(.v15), .iOS(.v18)],
 	products: [
 		.library(
 			name: "Account",
@@ -11,11 +11,13 @@ let package = Package(
 			targets: ["Account"])
 	],
 	dependencies: [
+		.package(path: "../ActivityLog"),
 		.package(path: "../Articles"),
 		.package(path: "../ArticlesDatabase"),
 		.package(path: "../CloudKitSync"),
 		.package(path: "../FeedFinder"),
 		.package(path: "../Secrets"),
+		.package(path: "../ErrorLog"),
 		.package(path: "../SyncDatabase"),
 		.package(path: "../RSWeb"),
 		.package(path: "../RSParser"),
@@ -31,9 +33,11 @@ let package = Package(
 				"RSDatabase",
 				"RSParser",
 				"RSWeb",
+				"ActivityLog",
 				"Articles",
 				"ArticlesDatabase",
 				"CloudKitSync",
+				"ErrorLog",
 				"FeedFinder",
 				"Secrets",
 				"SyncDatabase",
